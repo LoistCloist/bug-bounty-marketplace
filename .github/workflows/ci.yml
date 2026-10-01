@@ -276,3 +276,68 @@ jobs:
             exit 1
           fi
           echo "All required jobs succeeded or were skipped."
+
+# ---------------------------------------------------------------------
+# Future worker job templates (Python and Rust services under workers/)
+# Uncomment and adapt once a real worker service lands under
+# workers/<service>/. Each should be added to the `changes` job's
+# filters (path-filtered to workers/<service>/**) and to ci-ok's
+# `needs`/result check once enabled.
+# ---------------------------------------------------------------------
+#
+#  worker-python-<service>:
+#    name: worker-python-<service>
+#    needs: changes
+#    if: needs.changes.outputs.worker-<service> == 'true'
+#    runs-on: ubuntu-latest
+#    defaults:
+#      run:
+#        working-directory: workers/<service>
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@v4
+#
+#      - name: Install uv
+#        uses: astral-sh/setup-uv@v3
+#        with:
+#          enable-cache: true
+#
+#      - name: Install dependencies
+#        run: uv sync --frozen
+#
+#      - name: Lint (ruff)
+#        run: uv run ruff check .
+#
+#      - name: Test (pytest)
+#        run: uv run pytest
+#
+#  worker-rust-<service>:
+#    name: worker-rust-<service>
+#    needs: changes
+#    if: needs.changes.outputs.worker-<service> == 'true'
+#    runs-on: ubuntu-latest
+#    defaults:
+#      run:
+#        working-directory: workers/<service>
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@v4
+#
+#      - name: Install Rust toolchain
+#        uses: dtolnay/rust-toolchain@stable
+#        with:
+#          components: rustfmt, clippy
+#
+#      - name: Cache cargo
+#        uses: Swatinem/rust-cache@v2
+#        with:
+#          workspaces: workers/<service>
+#
+#      - name: Format check
+#        run: cargo fmt --check
+#
+#      - name: Clippy
+#        run: cargo clippy --all-targets -- -D warnings
+#
+#      - name: Test
+#        run: cargo test
