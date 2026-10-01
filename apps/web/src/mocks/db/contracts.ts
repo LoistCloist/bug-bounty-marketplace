@@ -138,6 +138,21 @@ function setContractStatus(contractId: string, status: ContractStatus): void {
   contract.status = status;
 }
 
+/** Cancels a bounty submission before any auditor has engaged with it.
+ * Only valid while the contract is still `Open` (i.e. unclaimed) - once an
+ * auditor claims it (status flips to `Claimed`) there's a submission in
+ * flight and cancellation is no longer allowed. */
+export function cancelContract(contractId: string): Contract {
+  const contract = findContractById(contractId);
+  if (!contract) throw new MockApiError(404, `Contract ${contractId} not found`);
+  if (contract.status !== "Open") {
+    throw new MockApiError(400, "Only an open, unclaimed contract can be cancelled");
+  }
+  cancelScheduled(`analysis:${contractId}`);
+  setContractStatus(contractId, "Expired");
+  return contract;
+}
+
 export function reclaimContract(contractId: string): Contract {
   const contract = findContractById(contractId);
   if (!contract) throw new MockApiError(404, `Contract ${contractId} not found`);
