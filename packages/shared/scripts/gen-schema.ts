@@ -20,7 +20,7 @@ import {
   FindingSchema,
   FindingStatusSchema,
   PoCSubmissionSchema,
-} from "../src/index.js";
+} from "../src/index";
 
 const entities: Record<string, z.ZodType> = {
   Contract: ContractSchema,
