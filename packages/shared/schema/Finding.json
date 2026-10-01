@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contractId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "Critical",
+        "High",
+        "Medium",
+        "Low",
+        "Informational"
+      ]
+    },
+    "slitherDetector": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rawOutputReference": {
+      "type": "string",
+      "minLength": 1
+    },
+    "llmExplanation": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "Flagged",
+        "Submitted",
+        "Verified",
+        "Disputed",
+        "Rejected",
+        "Paid"
+      ]
+    },
+    "statusHistory": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "Flagged",
+              "Submitted",
+              "Verified",
+              "Disputed",
+              "Rejected",
+              "Paid"
+            ]
+          },
+          "changedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "status",
+          "changedAt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "claimedByAuditorId": {
+      "default": null,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "claimExpiresAt": {
+      "default": null,
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "isFalsePositive": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "id",
+    "contractId",
+    "severity",
+    "slitherDetector",
+    "rawOutputReference",
+    "llmExplanation",
+    "status",
+    "statusHistory",
+    "claimedByAuditorId",
+    "claimExpiresAt",
+    "isFalsePositive"
+  ],
+  "additionalProperties": false
+}
