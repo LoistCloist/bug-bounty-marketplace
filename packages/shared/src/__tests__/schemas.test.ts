@@ -101,6 +101,7 @@ describe("FindingSchema", () => {
     claimedByAuditorId: null,
     claimExpiresAt: null,
     isFalsePositive: false,
+    challengeWindowExpiresAt: null,
   };
 
   it("accepts a well-formed finding", () => {
@@ -114,6 +115,15 @@ describe("FindingSchema", () => {
   it("rejects a missing llmExplanation", () => {
     const { llmExplanation: _llmExplanation, ...missing } = valid;
     expect(FindingSchema.safeParse(missing).success).toBe(false);
+  });
+
+  it("accepts a Verified finding with an open challenge window", () => {
+    const verified = {
+      ...valid,
+      status: "Verified",
+      challengeWindowExpiresAt: now,
+    };
+    expect(FindingSchema.safeParse(verified).success).toBe(true);
   });
 });
 

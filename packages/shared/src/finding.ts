@@ -56,5 +56,9 @@ export const FindingSchema = z.object({
   claimExpiresAt: TimestampSchema.nullable().default(null),
   /** Set by an auditor who reviewed the AI finding and judged it bogus. */
   isFalsePositive: z.boolean().default(false),
+  /** Set when the finding becomes Verified; null otherwise. The developer
+   * may dispute until this passes, after which escrow pays out if the
+   * finding is still Verified (no dispute opened). */
+  challengeWindowExpiresAt: TimestampSchema.nullable().default(null),
 });
 export type Finding = z.infer<typeof FindingSchema>;
