@@ -1,5 +1,6 @@
 import { http, HttpResponse } from "msw";
 import {
+  cancelContract,
   createContract,
   disputeFinding,
   findContractById,
@@ -88,6 +89,15 @@ export const developerHandlers = [
   http.post("*/api/contracts/:id/reclaim", ({ params }) => {
     try {
       const contract = reclaimContract(String(params.id));
+      return HttpResponse.json(contract);
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }),
+
+  http.post("*/api/contracts/:id/cancel", ({ params }) => {
+    try {
+      const contract = cancelContract(String(params.id));
       return HttpResponse.json(contract);
     } catch (err) {
       return errorResponse(err);
