@@ -7,9 +7,17 @@
   "types": "./src/index.ts",
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "gen:schema": "tsx scripts/gen-schema.ts",
+    "test": "vitest run"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.5"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
   }
 }
