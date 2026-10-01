@@ -1,0 +1,40 @@
+# Placeholder compose file. Nothing here is runnable yet — this just
+# reserves the shape of local dev infrastructure for later branches.
+version: "3.9"
+
+services: {}
+  # web:
+  #   build:
+  #     context: ./apps/web
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - NEXT_PUBLIC_API_MOCKING=enabled
+
+  # api:
+  #   build:
+  #     context: ./apps/api
+  #   ports:
+  #     - "3001:3001"
+  #   depends_on:
+  #     - db
+
+  # db:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     - POSTGRES_USER=bbm
+  #     - POSTGRES_PASSWORD=bbm
+  #     - POSTGRES_DB=bbm
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - db-data:/var/lib/postgresql/data
+
+  # analysis:
+  #   build:
+  #     context: ./workers/analysis
+  #   depends_on:
+  #     - db
+
+# volumes:
+#   db-data:
