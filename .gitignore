@@ -37,3 +37,4 @@ broadcast/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+.worktrees/

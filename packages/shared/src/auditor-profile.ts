@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AddressSchema, IdSchema } from "./common.js";
+import { AddressSchema, IdSchema } from "./common";
 
 export const AuditorProfileSchema = z.object({
   id: IdSchema,
