@@ -18,7 +18,7 @@ import {
   FindingSchema,
   FindingStatusSchema,
   PoCSubmissionSchema,
-} from "../index.js";
+} from "../index";
 
 const schemaDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AddressSchema, IdSchema, TimestampSchema } from "./common.js";
+import { AddressSchema, IdSchema, TimestampSchema } from "./common";
 
 /**
  * Lifecycle of a submitted contract:
