@@ -194,3 +194,38 @@ jobs:
 
       - name: Build
         run: pnpm --filter @bbm/api run build
+
+  # ---------------------------------------------------------------------
+  # contracts - Foundry project. forge-std isn't checked in as a git
+  # submodule yet, so install it fresh (--no-commit, nothing to commit
+  # in CI anyway) before building/testing. Slither then runs a static
+  # analysis pass over the same sources.
+  # ---------------------------------------------------------------------
+  contracts:
+    name: contracts
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install forge-std
+        working-directory: contracts
+        run: forge install foundry-rs/forge-std --no-commit
+
+      - name: Forge build
+        working-directory: contracts
+        run: forge build
+
+      - name: Forge test
+        working-directory: contracts
+        run: forge test -vvv
+
+      - name: Slither static analysis
+        uses: crytic/slither-action@v0.4.0
+        with:
+          target: 'contracts/'
