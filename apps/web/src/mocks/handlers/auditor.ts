@@ -1,0 +1,102 @@
+import { http, HttpResponse } from "msw";
+import {
+  claimContract,
+  findAuditorById,
+  listQueue,
+  markFalsePositive,
+  postStake,
+  submitPoc,
+} from "../db/auditors";
+import { errorResponse } from "./util";
+
+/**
+ * Auditor-flow routes: queue, claim, stake, PoC submission, false-positive
+ * flagging, own profile. Owns no routes outside this area.
+ */
+export const auditorHandlers = [
+  http.get("*/api/auditor/queue", ({ request }) => {
+    const url = new URL(request.url);
+    const sortParam = url.searchParams.get("sort");
+    const sort = sortParam === "deadline" || sortParam === "bounty" ? sortParam : undefined;
+    return HttpResponse.json(listQueue(sort));
+  }),
+
+  http.post("*/api/auditor/claim", async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as {
+      contractId?: string;
+      auditorId?: string;
+    };
+    if (!body.contractId || !body.auditorId) {
+      return HttpResponse.json(
+        { error: "contractId and auditorId are required" },
+        { status: 400 },
+      );
+    }
+    try {
+      return HttpResponse.json(claimContract(body.contractId, body.auditorId));
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }),
+
+  http.get("*/api/auditor/profile", ({ request }) => {
+    const url = new URL(request.url);
+    const auditorId = url.searchParams.get("auditorId");
+    if (!auditorId) {
+      return HttpResponse.json({ error: "auditorId is required" }, { status: 400 });
+    }
+    const profile = findAuditorById(auditorId);
+    if (!profile) return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    return HttpResponse.json(profile);
+  }),
+
+  http.post("*/api/auditor/stake", async ({ request }) => {
+    const body = (await request.json().catch(() => ({}))) as {
+      auditorId?: string;
+      amount?: number;
+    };
+    if (!body.auditorId || typeof body.amount !== "number") {
+      return HttpResponse.json(
+        { error: "auditorId and a numeric amount are required" },
+        { status: 400 },
+      );
+    }
+    try {
+      return HttpResponse.json(postStake(body.auditorId, body.amount));
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }),
+
+  http.post("*/api/auditor/poc", async ({ request }) => {
+    const form = await request.formData();
+    const file = form.get("file");
+    const findingId = String(form.get("findingId") ?? "");
+    const auditorId = String(form.get("auditorId") ?? "");
+
+    if (!(file instanceof File) || !findingId || !auditorId) {
+      return HttpResponse.json(
+        { error: "findingId, auditorId and file are required" },
+        { status: 400 },
+      );
+    }
+    try {
+      const poc = submitPoc(findingId, auditorId, file.name);
+      return HttpResponse.json(poc, { status: 201 });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }),
+
+  http.post("*/api/findings/:id/false-positive", async ({ params, request }) => {
+    const body = (await request.json().catch(() => ({}))) as { auditorId?: string };
+    if (!body.auditorId) {
+      return HttpResponse.json({ error: "auditorId is required" }, { status: 400 });
+    }
+    try {
+      return HttpResponse.json(markFalsePositive(String(params.id), body.auditorId));
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }),
+];
