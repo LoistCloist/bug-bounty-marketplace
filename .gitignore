@@ -1,0 +1,39 @@
+# Node / TypeScript
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+out/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+coverage/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.DS_Store
+
+# Python (workers/)
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Rust (workers/)
+target/
+
+# Foundry (contracts/)
+contracts/cache/
+contracts/out/
+broadcast/
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
