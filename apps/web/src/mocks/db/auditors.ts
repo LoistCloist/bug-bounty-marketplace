@@ -27,7 +27,7 @@ export interface QueueItem extends Contract {
   bounty: { amount: number; currency: string };
 }
 
-export function listQueue(sort?: "deadline" | "bounty"): QueueItem[] {
+export function listQueue(sort?: "deadline" | "bounty" | "newest"): QueueItem[] {
   const open = db.contracts.filter((c) => c.status === "Open");
   const items: QueueItem[] = open.map((c) => {
     const bounty = db.bounties.find((b) => b.contractId === c.id);
@@ -37,6 +37,8 @@ export function listQueue(sort?: "deadline" | "bounty"): QueueItem[] {
     items.sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime());
   } else if (sort === "bounty") {
     items.sort((a, b) => b.bounty.amount - a.bounty.amount);
+  } else if (sort === "newest") {
+    items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
   return items;
 }
