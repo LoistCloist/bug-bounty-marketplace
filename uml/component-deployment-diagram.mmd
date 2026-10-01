@@ -1,0 +1,62 @@
+flowchart TB
+    subgraph Client["Browser (Developer / Auditor / Arbiter)"]
+        UI["Next.js App Router UI<br/>role switcher + mocked wallet"]
+        RQ["TanStack Query cache"]
+        APIClient["Typed API Client<br/>apps/web/src/lib/api<br/>(.parse() every response)"]
+        MSWWorker["MSW Service Worker<br/>(NEXT_PUBLIC_API_MOCKING=enabled)"]
+        UI --> RQ --> APIClient
+        APIClient -. intercepted in dev .-> MSWWorker
+    end
+
+    subgraph MockBackend["Mock Backend (in-browser, Milestone 2)"]
+        Handlers["MSW Handlers<br/>handlers/{developer,auditor,arbiter}.ts"]
+        MockDB["In-memory Mock DB + Scheduler<br/>db/{contracts,auditors,disputes}.ts"]
+        Handlers --> MockDB
+    end
+    MSWWorker --> Handlers
+
+    subgraph SharedPkg["packages/shared (@bbm/shared)"]
+        Zod["Zod schemas + inferred types<br/>Contract, Bounty, Finding, PoCSubmission,<br/>Dispute, AuditorProfile"]
+        JSONSchema["Generated JSON Schema<br/>packages/shared/schema/*.json"]
+        Zod -- gen:schema --> JSONSchema
+    end
+    APIClient -.imports types.-> Zod
+    Handlers -.imports types.-> Zod
+
+    subgraph RealAPI["apps/api (Fastify) - future real backend"]
+        Health["GET /health (implemented)"]
+        FutureRoutes["Contract/Finding/Dispute routes<br/>(not yet built - mocked by MSW today)"]
+    end
+    FutureRoutes -.will replace.-> Handlers
+    FutureRoutes -.imports types.-> Zod
+
+    subgraph Workers["workers/ - future non-TS services"]
+        Analysis["workers/analysis (Python)<br/>Slither static analysis + LLM explanation"]
+        OtherWorker["future Rust service"]
+    end
+    Analysis -. datamodel-code-generator .-> JSONSchema
+    OtherWorker -. typify .-> JSONSchema
+    RealAPI --> Analysis
+
+    subgraph Contracts["contracts/ (Foundry) - future on-chain"]
+        Escrow["Bounty escrow contract"]
+        PoCTests["Submitted PoC .t.sol tests"]
+        Sandbox["Sandbox re-run environment"]
+    end
+    RealAPI -.will call.-> Escrow
+    PoCTests --> Sandbox
+
+    subgraph CI["CI/CD - .github/workflows/ci.yml"]
+        PathFilter["changes (dorny/paths-filter)"]
+        WebJob["web: lint/typecheck/test/build"]
+        SharedJob["shared: typecheck/test + gen:schema staleness check"]
+        ApiJob["api: lint/typecheck/test"]
+        ContractsJob["contracts: forge build/test + Slither"]
+        Gate["ci-ok (required status check)"]
+        PathFilter --> WebJob & SharedJob & ApiJob & ContractsJob --> Gate
+    end
+
+    classDef current fill:#2563eb,stroke:#1e3a8a,color:#fff;
+    classDef future fill:#9ca3af,stroke:#4b5563,color:#1f2937,stroke-dasharray: 5 3;
+    class UI,RQ,APIClient,MSWWorker,Handlers,MockDB,Zod,JSONSchema,Health,PathFilter,WebJob,SharedJob,ApiJob,ContractsJob,Gate current;
+    class FutureRoutes,Analysis,OtherWorker,Escrow,PoCTests,Sandbox future;
