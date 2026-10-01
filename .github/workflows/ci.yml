@@ -1,0 +1,196 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Compute which parts of the monorepo changed so downstream jobs only
+  # run when relevant. Root/shared config changes (lockfile, base
+  # tsconfig, eslint config, this workflow file, etc.) fan out to every
+  # TS/JS job, since a change there can break any package. The contracts
+  # job is a separate toolchain (Foundry/Solidity) and is intentionally
+  # NOT triggered by root JS/TS config changes.
+  # ---------------------------------------------------------------------
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      root: ${{ steps.filter.outputs.root }}
+      web: ${{ steps.filter.outputs.web }}
+      api: ${{ steps.filter.outputs.api }}
+      shared: ${{ steps.filter.outputs.shared }}
+      contracts: ${{ steps.filter.outputs.contracts }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so paths-filter can diff against the correct
+          # base commit on both push and pull_request events.
+          fetch-depth: 0
+
+      - name: Filter paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          # NOTE: YAML anchors cannot merge *into* another sequence (only
+          # mappings support the `<<` merge key), so `root`'s paths are
+          # intentionally repeated under web/api/shared below rather than
+          # aliased - an aliased `- *root` here would nest as a single
+          # list-shaped element instead of flattening, which paths-filter
+          # would not interpret as individual glob patterns. `root` is
+          # also kept as its own output; job-level `if` conditions OR it
+          # in, so a root config change fans out to every TS/JS job.
+          filters: |
+            root:
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'tsconfig.base.json'
+              - 'eslint.config.mjs'
+              - '.prettierrc.json'
+              - '.github/workflows/ci.yml'
+
+            # packages/shared is a dependency-to-be of both apps/web and
+            # apps/api (the real @bbm/shared schemas package lands in
+            # feat/shared-schemas), so changes there must also re-run
+            # the web and api jobs even though no pnpm dependency edge
+            # exists yet.
+            web:
+              - 'apps/web/**'
+              - 'packages/shared/**'
+            api:
+              - 'apps/api/**'
+              - 'packages/shared/**'
+            shared:
+              - 'packages/shared/**'
+
+            # Separate toolchain (Foundry/Solidity) - not affected by
+            # root JS/TS tooling config.
+            contracts:
+              - 'contracts/**'
+
+  # ---------------------------------------------------------------------
+  # apps/web - placeholder package today, becomes the real Next.js app
+  # in a later branch. Scripts are run with --if-present so this job
+  # succeeds cleanly today and "just works" once real scripts land.
+  # ---------------------------------------------------------------------
+  web:
+    name: web
+    needs: changes
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.root == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm --filter @bbm/web run lint --if-present
+
+      - name: Typecheck
+        run: pnpm --filter @bbm/web run typecheck --if-present
+
+      - name: Test
+        run: pnpm --filter @bbm/web run test --if-present
+
+      - name: Build
+        run: pnpm --filter @bbm/web run build --if-present
+
+  # ---------------------------------------------------------------------
+  # packages/shared - placeholder TS package today. Also runs a
+  # "generated schema is up to date" check. The gen:schema script does
+  # not exist yet (it is added in feat/shared-schemas); run with
+  # --if-present so this step is a harmless no-op today and becomes a
+  # real staleness check the moment that script lands, with no CI
+  # changes required.
+  # ---------------------------------------------------------------------
+  shared:
+    name: shared
+    needs: changes
+    if: needs.changes.outputs.shared == 'true' || needs.changes.outputs.root == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm --filter @bbm/shared run lint --if-present
+
+      - name: Typecheck
+        run: pnpm --filter @bbm/shared run typecheck --if-present
+
+      - name: Test
+        run: pnpm --filter @bbm/shared run test --if-present
+
+      - name: Regenerate schema (if gen:schema exists)
+        run: pnpm --filter @bbm/shared run gen:schema --if-present
+
+      - name: Fail if generated schema is out of date
+        run: git diff --exit-code -- packages/shared/schema
+
+  # ---------------------------------------------------------------------
+  # apps/api - real Fastify app with real lint/typecheck/test/build
+  # scripts already. Run them directly (no --if-present) so this job
+  # fails loudly if one of those scripts ever disappears.
+  # ---------------------------------------------------------------------
+  api:
+    name: api
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.root == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm --filter @bbm/api run lint
+
+      - name: Typecheck
+        run: pnpm --filter @bbm/api run typecheck
+
+      - name: Test
+        run: pnpm --filter @bbm/api run test
+
+      - name: Build
+        run: pnpm --filter @bbm/api run build
