@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdSchema, TimestampSchema } from "./common.js";
+import { IdSchema, TimestampSchema } from "./common";
 
 /**
  * Escrowed bounty funds for a contract. Kept deliberately simple (a numeric

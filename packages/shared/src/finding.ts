@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdSchema, TimestampSchema } from "./common.js";
+import { IdSchema, TimestampSchema } from "./common";
 
 /**
  * - Flagged: raised by Slither + explained by the LLM, not yet claimed.

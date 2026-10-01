@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdSchema, TimestampSchema } from "./common.js";
+import { IdSchema, TimestampSchema } from "./common";
 
 export const SandboxStatusSchema = z.enum(["Pending", "Passed", "Failed"]);
 export type SandboxStatus = z.infer<typeof SandboxStatusSchema>;

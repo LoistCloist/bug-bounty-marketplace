@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdSchema, TimestampSchema } from "./common.js";
+import { IdSchema, TimestampSchema } from "./common";
 
 export const DisputeRulingSchema = z.enum(["Pending", "ForAuditor", "AgainstAuditor"]);
 export type DisputeRuling = z.infer<typeof DisputeRulingSchema>;

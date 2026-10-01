@@ -5,10 +5,10 @@
 
 export const SHARED_PACKAGE_NAME = "@bbm/shared";
 
-export * from "./common.js";
-export * from "./contract.js";
-export * from "./bounty.js";
-export * from "./finding.js";
-export * from "./poc-submission.js";
-export * from "./dispute.js";
-export * from "./auditor-profile.js";
+export * from "./common";
+export * from "./contract";
+export * from "./bounty";
+export * from "./finding";
+export * from "./poc-submission";
+export * from "./dispute";
+export * from "./auditor-profile";
