@@ -7,7 +7,7 @@ import {
   FindingSchema,
   FindingStatusSchema,
   PoCSubmissionSchema,
-} from "../index.js";
+} from "../index";
 
 const now = "2026-09-30T12:00:00.000Z";
 const later = "2026-10-30T12:00:00.000Z";
