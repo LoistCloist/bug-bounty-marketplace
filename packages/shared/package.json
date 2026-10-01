@@ -7,9 +7,12 @@
   "types": "./src/index.ts",
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "gen:schema": "tsx scripts/gen-schema.ts"
   },
   "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
     "typescript": "^5.9.3"
   },
   "dependencies": {
