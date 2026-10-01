@@ -229,3 +229,50 @@ jobs:
         uses: crytic/slither-action@v0.4.0
         with:
           target: 'contracts/'
+
+  # ---------------------------------------------------------------------
+  # Single required status check for branch protection: succeeds as
+  # long as every needed job either succeeded or was skipped (because
+  # its path filter didn't match), and fails if any of them actually
+  # failed.
+  # ---------------------------------------------------------------------
+  ci-ok:
+    name: CI OK
+    if: always()
+    needs: [changes, web, shared, api, contracts]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required job results
+        run: |
+          set -euo pipefail
+          # `changes` itself is not allowed to be skipped/failed - if it
+          # fails, every downstream job gets skipped by GitHub Actions,
+          # which would otherwise look like a harmless all-skipped pass.
+          declare -A results=(
+            [changes]="${{ needs.changes.result }}"
+            [web]="${{ needs.web.result }}"
+            [shared]="${{ needs.shared.result }}"
+            [api]="${{ needs.api.result }}"
+            [contracts]="${{ needs.contracts.result }}"
+          )
+          failed=0
+          for job in "${!results[@]}"; do
+            result="${results[$job]}"
+            echo "$job: $result"
+            if [[ "$job" == "changes" ]]; then
+              if [[ "$result" != "success" ]]; then
+                echo "::error::Required job 'changes' finished with status '$result'"
+                failed=1
+              fi
+              continue
+            fi
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "::error::Required job '$job' finished with status '$result'"
+              failed=1
+            fi
+          done
+          if [[ "$failed" -ne 0 ]]; then
+            echo "One or more required jobs failed."
+            exit 1
+          fi
+          echo "All required jobs succeeded or were skipped."
