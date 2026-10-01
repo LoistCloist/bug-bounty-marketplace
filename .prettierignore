@@ -1,0 +1,11 @@
+node_modules
+dist
+build
+.next
+.turbo
+out
+cache
+pnpm-lock.yaml
+contracts/out
+contracts/cache
+*.sol
