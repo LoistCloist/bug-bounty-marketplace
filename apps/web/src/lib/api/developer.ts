@@ -58,3 +58,10 @@ export function disputeFinding(findingId: string, input: DisputeFindingInput): P
 export function reclaimBounty(contractId: string): Promise<Contract> {
   return postJson(`/api/contracts/${contractId}/reclaim`, {}, ContractSchema);
 }
+
+/** POST /api/contracts/:id/cancel - withdraws a bounty submission before any
+ * auditor has engaged with it. Only valid while the contract is still
+ * `Open`; the mock 400s once it has been claimed. */
+export function cancelContract(contractId: string): Promise<Contract> {
+  return postJson(`/api/contracts/${contractId}/cancel`, {}, ContractSchema);
+}
