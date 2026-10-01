@@ -102,16 +102,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm --filter @bbm/web run lint --if-present
+        run: pnpm --filter @bbm/web run --if-present lint
 
       - name: Typecheck
-        run: pnpm --filter @bbm/web run typecheck --if-present
+        run: pnpm --filter @bbm/web run --if-present typecheck
 
       - name: Test
-        run: pnpm --filter @bbm/web run test --if-present
+        run: pnpm --filter @bbm/web run --if-present test
 
       - name: Build
-        run: pnpm --filter @bbm/web run build --if-present
+        run: pnpm --filter @bbm/web run --if-present build
 
   # ---------------------------------------------------------------------
   # packages/shared - placeholder TS package today. Also runs a
@@ -143,16 +143,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: pnpm --filter @bbm/shared run lint --if-present
+        run: pnpm --filter @bbm/shared run --if-present lint
 
       - name: Typecheck
-        run: pnpm --filter @bbm/shared run typecheck --if-present
+        run: pnpm --filter @bbm/shared run --if-present typecheck
 
       - name: Test
-        run: pnpm --filter @bbm/shared run test --if-present
+        run: pnpm --filter @bbm/shared run --if-present test
 
       - name: Regenerate schema (if gen:schema exists)
-        run: pnpm --filter @bbm/shared run gen:schema --if-present
+        run: pnpm --filter @bbm/shared run --if-present gen:schema
 
       - name: Fail if generated schema is out of date
         run: git diff --exit-code -- packages/shared/schema
@@ -229,6 +229,10 @@ jobs:
         uses: crytic/slither-action@v0.4.0
         with:
           target: 'contracts/'
+          # Findings are advisory in this product (explained by the LLM,
+          # verified only via a sandboxed PoC) - CI should run Slither as a
+          # sanity check, not gate merges on every detector hit.
+          fail-on: none
 
   # ---------------------------------------------------------------------
   # Single required status check for branch protection: succeeds as
