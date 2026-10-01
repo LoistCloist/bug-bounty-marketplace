@@ -19,9 +19,11 @@ export const QueueItemSchema = ContractSchema.extend({
 });
 export type QueueItem = z.infer<typeof QueueItemSchema>;
 
-/** GET /api/auditor/queue[?sort=deadline|bounty] - open, unclaimed
+/** GET /api/auditor/queue[?sort=deadline|bounty|newest] - open, unclaimed
  * contracts. */
-export function listQueue(params?: { sort?: "deadline" | "bounty" }): Promise<QueueItem[]> {
+export function listQueue(params?: {
+  sort?: "deadline" | "bounty" | "newest";
+}): Promise<QueueItem[]> {
   return getJson(
     `/api/auditor/queue${toQueryString({ sort: params?.sort })}`,
     z.array(QueueItemSchema),

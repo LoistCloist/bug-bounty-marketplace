@@ -17,7 +17,10 @@ export const auditorHandlers = [
   http.get("*/api/auditor/queue", ({ request }) => {
     const url = new URL(request.url);
     const sortParam = url.searchParams.get("sort");
-    const sort = sortParam === "deadline" || sortParam === "bounty" ? sortParam : undefined;
+    const sort =
+      sortParam === "deadline" || sortParam === "bounty" || sortParam === "newest"
+        ? sortParam
+        : undefined;
     return HttpResponse.json(listQueue(sort));
   }),
 
