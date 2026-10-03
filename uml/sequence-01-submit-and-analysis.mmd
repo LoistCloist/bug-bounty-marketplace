@@ -1,0 +1,31 @@
+sequenceDiagram
+    actor Dev as Developer
+    participant Web as Next.js App<br/>(/submit)
+    participant API as Typed API Client<br/>(developerApi)
+    participant Mock as MSW Handler<br/>(developer.ts)
+    participant DB as Mock DB + Scheduler
+
+    Dev->>Web: Select .sol file, bounty amount, deadline
+    Web->>Web: Validate extension (.sol) and size (<=100KB)
+    Web->>API: submitContract(file, bountyAmount, deadline)
+    API->>Mock: POST /api/contracts (multipart FormData)
+    Mock->>DB: createContract()
+    DB->>DB: Store Contract (status=Open) + Bounty
+    DB->>DB: scheduleOnce("analysis:<id>", ~3s)
+    DB-->>Mock: Contract
+    Mock-->>API: 201 Contract
+    API-->>Web: Contract (parsed via ContractSchema)
+    Web->>Dev: Redirect to /contracts/:id
+
+    Note over Web,DB: Web polls GET /api/contracts/:id/findings every 2s
+
+    DB->>DB: Timer fires: generateFindingsForContract()
+    DB->>DB: Findings created, status=Flagged,<br/>statusHistory=[{Flagged, now}]
+
+    Web->>API: listFindings(contractId)
+    API->>Mock: GET /api/contracts/:id/findings
+    Mock->>DB: listFindingsByContract()
+    DB-->>Mock: Finding[]
+    Mock-->>API: 200 Finding[]
+    API-->>Web: Finding[] (parsed via FindingSchema)
+    Web->>Dev: Render findings (severity, LLM explanation, raw output toggle)

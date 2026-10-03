@@ -1,0 +1,53 @@
+sequenceDiagram
+    actor Dev as Developer
+    actor Arb as Arbiter
+    participant Web as Next.js App
+    participant API as Typed API Client
+    participant Mock as MSW Handlers
+    participant DB as Mock DB + Scheduler
+
+    Note over DB: Finding.status = Verified<br/>challengeWindowExpiresAt = now + 30s<br/>scheduleOnce("autopay:<findingId>", 30s)
+
+    alt Developer disputes within the challenge window
+        Dev->>Web: Click "Dispute", enter reason
+        Web->>API: disputeFinding(findingId, {developerId, reason})
+        API->>Mock: POST /api/findings/:id/dispute
+        Mock->>DB: disputeFinding()
+        DB->>DB: Validate status==Verified and window not expired
+        DB->>DB: cancelChallengeWindow() - cancels pending autopay timer
+        DB->>DB: Finding.status = Disputed
+        Mock->>DB: openDispute()
+        DB->>DB: Create Dispute (ruling=Pending)
+        DB-->>Mock: Dispute
+        Mock-->>API: 201 Dispute
+        API-->>Web: Finding now Disputed
+
+        Arb->>Web: Open /arbiter (Pending tab)
+        Web->>API: listDisputes({ruling: "Pending"})
+        API->>Mock: GET /api/arbiter/disputes?ruling=Pending
+        Mock->>DB: listDisputes() + join Finding + PoCSubmission
+        DB-->>Mock: ArbiterDisputeView[]
+        Mock-->>API: 200 ArbiterDisputeView[]
+        API-->>Web: Show developer reason, sandbox log, LLM explanation
+        Arb->>Web: Confirm ruling (ForAuditor | AgainstAuditor)
+        Web->>API: ruleOnDispute(disputeId, {arbiterId, ruling})
+        API->>Mock: POST /api/arbiter/disputes/:id/rule
+        Mock->>DB: ruleOnDispute()
+        alt ruling = ForAuditor
+            DB->>DB: Finding.status = Paid<br/>Contract.status = Resolved<br/>AuditorProfile.reputation += 1
+        else ruling = AgainstAuditor
+            DB->>DB: Finding.status = Rejected<br/>AuditorProfile.reputation -= 1<br/>AuditorProfile.stake -= 100 (floored at 0)
+        end
+        DB-->>Mock: Dispute (ruled)
+        Mock-->>API: 200 Dispute
+        API-->>Web: Dispute removed from Pending list
+
+    else No dispute before the window elapses
+        DB->>DB: Timer fires: autopay callback
+        DB->>DB: Guard: Finding.status still Verified?
+        DB->>DB: Finding.status = Paid<br/>Contract.status = Resolved
+        Web->>API: listFindings(contractId) (polling)
+        API->>Mock: GET /api/contracts/:id/findings
+        Mock-->>API: 200 Finding[] (Paid)
+        API-->>Web: Show Paid status to Developer/Auditor
+    end

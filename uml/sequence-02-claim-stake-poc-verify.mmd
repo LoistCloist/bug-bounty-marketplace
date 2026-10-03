@@ -1,0 +1,62 @@
+sequenceDiagram
+    actor Aud as Auditor
+    participant Web as Next.js App<br/>(/auditor)
+    participant API as Typed API Client<br/>(auditorApi)
+    participant Mock as MSW Handler<br/>(auditor.ts)
+    participant DB as Mock DB + Scheduler
+
+    Aud->>Web: Open queue, sort by newest/deadline/bounty
+    Web->>API: listQueue({sort})
+    API->>Mock: GET /api/auditor/queue?sort=...
+    Mock->>DB: listQueue() (Open contracts only)
+    DB-->>Mock: QueueItem[]
+    Mock-->>API: 200 QueueItem[]
+    API-->>Web: QueueItem[]
+
+    Aud->>Web: Click "Claim"
+    Web->>API: claimContract(contractId, auditorId)
+    API->>Mock: POST /api/auditor/claim
+    alt contract still Open
+        Mock->>DB: claimContract()
+        DB->>DB: Contract.status = Claimed<br/>Finding.claimedByAuditorId/claimExpiresAt set (+10 min)
+        DB-->>Mock: Contract
+        Mock-->>API: 200 Contract
+        Web->>Aud: Show live claim-expiry countdown
+    else already claimed
+        Mock-->>API: 409 Conflict
+        API-->>Web: ApiError(409)
+        Web->>Aud: "Already claimed" message, refresh queue
+    end
+
+    Aud->>Web: Post stake (gate requires stake >= REQUIRED_STAKE)
+    Web->>API: postStake(auditorId, amount)
+    API->>Mock: POST /api/auditor/stake
+    Mock->>DB: postStake()
+    DB-->>Mock: AuditorProfile (stake updated)
+    Mock-->>API: 200 AuditorProfile
+    API-->>Web: Unlock PoC upload UI
+
+    Aud->>Web: Upload PoC (.t.sol) for a Flagged finding
+    Web->>API: submitPoc(findingId, auditorId, file)
+    API->>Mock: POST /api/auditor/poc (multipart FormData)
+    Mock->>DB: submitPoc()
+    DB->>DB: Create PoCSubmission (sandboxStatus=Pending)<br/>Finding.status = Submitted
+    DB->>DB: scheduleOnce("sandbox:<pocId>", ~3s)
+    DB-->>Mock: PoCSubmission
+    Mock-->>API: 201 PoCSubmission
+    API-->>Web: Finding now Submitted (UI hides re-submit)
+
+    Note over Web,DB: Web polls findings every 2s
+
+    DB->>DB: Timer fires: resolveSandbox()
+    alt PoC reproduces the exploit
+        DB->>DB: PoCSubmission.sandboxStatus = Passed<br/>Finding.status = Verified<br/>armChallengeWindow() -> challengeWindowExpiresAt = now+30s
+    else PoC fails to reproduce (seeded failing case)
+        DB->>DB: PoCSubmission.sandboxStatus = Failed<br/>Finding.status = Rejected
+    end
+
+    Web->>API: listFindings(contractId)
+    API->>Mock: GET /api/contracts/:id/findings
+    Mock-->>API: 200 Finding[] (Verified or Rejected)
+    API-->>Web: Updated findings
+    Web->>Aud: Show new status live

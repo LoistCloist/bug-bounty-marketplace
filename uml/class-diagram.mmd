@@ -1,0 +1,128 @@
+classDiagram
+    direction LR
+
+    class Contract {
+        +string id
+        +Address developerAddress
+        +string filename
+        +string sourceHash
+        +string sourceReference
+        +string bountyId
+        +ContractStatus status
+        +Timestamp createdAt
+        +Timestamp deadline
+    }
+
+    class ContractStatus {
+        <<enumeration>>
+        Open
+        Claimed
+        Resolved
+        Expired
+    }
+
+    class Bounty {
+        +string id
+        +string contractId
+        +number amount
+        +string currency
+        +Timestamp fundedAt
+        +Timestamp deadline
+    }
+
+    class Finding {
+        +string id
+        +string contractId
+        +FindingSeverity severity
+        +string slitherDetector
+        +string rawOutputReference
+        +string llmExplanation
+        +FindingStatus status
+        +FindingStatusHistoryEntry[] statusHistory
+        +string claimedByAuditorId
+        +Timestamp claimExpiresAt
+        +boolean isFalsePositive
+        +Timestamp challengeWindowExpiresAt
+    }
+
+    class FindingStatus {
+        <<enumeration>>
+        Flagged
+        Submitted
+        Verified
+        Disputed
+        Rejected
+        Paid
+    }
+
+    class FindingSeverity {
+        <<enumeration>>
+        Critical
+        High
+        Medium
+        Low
+        Informational
+    }
+
+    class FindingStatusHistoryEntry {
+        +FindingStatus status
+        +Timestamp changedAt
+    }
+
+    class PoCSubmission {
+        +string id
+        +string findingId
+        +string auditorId
+        +string testFileReference
+        +Timestamp submittedAt
+        +SandboxStatus sandboxStatus
+        +string sandboxLog
+    }
+
+    class SandboxStatus {
+        <<enumeration>>
+        Pending
+        Passed
+        Failed
+    }
+
+    class Dispute {
+        +string id
+        +string findingId
+        +string developerId
+        +string reason
+        +Timestamp openedAt
+        +Timestamp challengeWindowExpiresAt
+        +DisputeRuling ruling
+        +Timestamp ruledAt
+        +string arbiterId
+    }
+
+    class DisputeRuling {
+        <<enumeration>>
+        Pending
+        ForAuditor
+        AgainstAuditor
+    }
+
+    class AuditorProfile {
+        +string id
+        +Address address
+        +number stake
+        +number reputation
+        +string[] claimedContractIds
+    }
+
+    Contract "1" --> "1" Bounty : funds
+    Contract "1" --> "0..*" Finding : has
+    Contract "1" --> "0..1" AuditorProfile : claimedBy
+    Finding "1" --> "0..*" PoCSubmission : challenged by
+    Finding "1" --> "0..1" Dispute : disputed as
+    Finding "1" --> "0..*" FindingStatusHistoryEntry : statusHistory
+    Finding --> FindingStatus
+    Finding --> FindingSeverity
+    Contract --> ContractStatus
+    PoCSubmission --> SandboxStatus
+    Dispute --> DisputeRuling
+    Dispute "0..*" --> "0..1" AuditorProfile : rules on
+    PoCSubmission "0..*" --> "1" AuditorProfile : submitted by
