@@ -96,9 +96,10 @@ workflow itself) also trigger web, api and shared, but not contracts.
 step passes silently. The api job calls its scripts directly, so a missing
 script fails the job.
 
-`CI OK` is the required status check on `main`. The ruleset is checked in
-at `.github/rulesets/main.json` as the source of truth; after changing it,
-a repo admin applies it with:
+`CI OK` is the required status check on `main` once the checked-in ruleset
+is applied (see `TODO.md`). The ruleset is checked in at
+`.github/rulesets/main.json` as the source of truth; after changing it, a
+repo admin applies it with:
 
 ```sh
 gh api -X PUT repos/LoistCloist/bug-bounty-marketplace/rulesets/24287837 --input .github/rulesets/main.json
