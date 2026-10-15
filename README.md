@@ -78,25 +78,27 @@ forge test
 ## CI
 
 `.github/workflows/ci.yml` runs on every push and pull request. A `changes`
-job uses `dorny/paths-filter` to decide which jobs run. Each job below runs
-only when its paths change. Changes to root config (`package.json`,
-lockfile, `tsconfig.base.json`, ESLint/Prettier config, the workflow itself)
-also trigger web, api and shared, but not contracts.
+job uses `dorny/paths-filter` to decide which jobs run. Each path-filtered
+job below runs only when its paths change; `changes` and `CI OK` always run.
+Changes to root config (`package.json`, `pnpm-lock.yaml`,
+`pnpm-workspace.yaml`, `tsconfig.base.json`, ESLint/Prettier config, the
+workflow itself) also trigger web, api and shared, but not contracts.
 
-| Job         | Runs when                                | What it does                                                                                                                                                       |
-| ----------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `web`       | `apps/web/**`, `packages/shared/**`, root | `lint`, `typecheck`, `test`, `build` with `--if-present`                                                                                                           |
-| `api`       | `apps/api/**`, `packages/shared/**`, root | `lint`, `typecheck`, `test`, `build`, run directly                                                                                                                 |
-| `shared`    | `packages/shared/**`, root                | `lint`, `typecheck`, `test` with `--if-present`, then `gen:schema` and `git diff --exit-code -- packages/shared/schema` to fail on stale generated schemas         |
-| `contracts` | `contracts/**`                            | Installs Foundry and forge-std, runs `forge build` and `forge test -vvv`, then Slither (`crytic/slither-action`) with `fail-on: none`, so Slither is advisory only |
-| `CI OK`     | always                                    | Passes if every other job succeeded or was skipped; fails otherwise                                                                                                |
+| Job         | Runs when                                 | What it does                                                                                                                                                         |
+| ----------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `web`       | `apps/web/**`, `packages/shared/**`, root | `lint`, `typecheck`, `test`, `build` with `--if-present`                                                                                                             |
+| `api`       | `apps/api/**`, `packages/shared/**`, root | `lint`, `typecheck`, `test`, `build`, run directly                                                                                                                   |
+| `shared`    | `packages/shared/**`, root                | `lint`, `typecheck`, `test` and `gen:schema` with `--if-present`, then `git diff --exit-code -- packages/shared/schema` to fail if tracked generated schemas changed |
+| `contracts` | `contracts/**`                            | Installs Foundry and forge-std, runs `forge build` and `forge test -vvv`, then Slither (`crytic/slither-action`) with `fail-on: none`, so Slither is advisory only   |
+| `CI OK`     | always                                    | Passes if `changes` succeeded and every other job succeeded or was skipped; fails otherwise                                                                          |
 
 `--if-present` means a package script that doesn't exist is skipped and the
 step passes silently. The api job calls its scripts directly, so a missing
 script fails the job.
 
 `CI OK` is the required status check on `main`. The ruleset is checked in
-at `.github/rulesets/main.json`; a repo admin applies it with:
+at `.github/rulesets/main.json` as the source of truth; after changing it,
+a repo admin applies it with:
 
 ```sh
 gh api -X PUT repos/LoistCloist/bug-bounty-marketplace/rulesets/24287837 --input .github/rulesets/main.json
