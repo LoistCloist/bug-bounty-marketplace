@@ -1,5 +1,11 @@
 import { http, HttpResponse } from "msw";
 import {
+  CONTRACT_SOURCE_MAX_BYTES,
+  ContractSourceFilenameSchema,
+  ContractSourceSizeSchema,
+  ContractSubmissionFieldsSchema,
+} from "@bbm/shared";
+import {
   cancelContract,
   createContract,
   disputeFinding,
@@ -11,6 +17,20 @@ import {
 import { openDispute } from "../db/disputes";
 import { errorResponse } from "./util";
 
+/** sha256 hex digest, matching the API's `createHash("sha256")` output. */
+async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Flattens a Zod safeParse result into its failure messages. */
+function failures(result: {
+  success: boolean;
+  error?: { issues: ReadonlyArray<{ message: string }> };
+}): string[] {
+  return result.error ? result.error.issues.map((issue) => issue.message) : [];
+}
+
 /**
  * Developer-flow routes: submit a contract, list contracts/findings,
  * dispute a finding, reclaim an expired bounty. Owns no routes outside this
@@ -20,28 +40,44 @@ export const developerHandlers = [
   http.post("*/api/contracts", async ({ request }) => {
     const form = await request.formData();
     const file = form.get("file");
-    const bountyAmount = Number(form.get("bountyAmount"));
-    const currency = String(form.get("currency") ?? "ETH");
-    const deadline = String(form.get("deadline") ?? "");
-    const developerAddress = String(form.get("developerAddress") ?? "");
 
     if (!(file instanceof File)) {
       return HttpResponse.json({ error: "file is required" }, { status: 400 });
     }
-    if (!deadline || !developerAddress || Number.isNaN(bountyAmount) || bountyAmount <= 0) {
+    // Mirror the API: an oversize upload is 413, anything else invalid is 400.
+    if (file.size > CONTRACT_SOURCE_MAX_BYTES) {
       return HttpResponse.json(
-        { error: "developerAddress, a positive bountyAmount, and deadline are required" },
+        { error: "Source file exceeds the 100 KB limit" },
+        { status: 413 },
+      );
+    }
+
+    const fields = ContractSubmissionFieldsSchema.safeParse({
+      developerAddress: form.get("developerAddress") ?? "",
+      bountyAmount: form.get("bountyAmount") ?? "",
+      currency: form.get("currency") ?? undefined,
+      deadline: form.get("deadline") ?? "",
+    });
+    const issues = [
+      ...failures(ContractSourceFilenameSchema.safeParse(file.name)),
+      ...failures(ContractSourceSizeSchema.safeParse(file.size)),
+      ...failures(fields),
+    ];
+    if (!fields.success || issues.length > 0) {
+      return HttpResponse.json(
+        { error: "Invalid contract submission", issues },
         { status: 400 },
       );
     }
 
     try {
       const contract = createContract({
-        developerAddress,
+        developerAddress: fields.data.developerAddress,
         filename: file.name,
-        bountyAmount,
-        currency,
-        deadline,
+        sourceHash: await sha256Hex(await file.arrayBuffer()),
+        bountyAmount: fields.data.bountyAmount,
+        currency: fields.data.currency,
+        deadline: fields.data.deadline,
       });
       return HttpResponse.json(contract, { status: 201 });
     } catch (err) {

@@ -92,6 +92,8 @@ export function findFindingById(findingId: string): Finding | undefined {
 export interface CreateContractInput {
   developerAddress: string;
   filename: string;
+  /** sha256 hex digest of the uploaded source bytes. */
+  sourceHash: string;
   bountyAmount: number;
   currency: string;
   deadline: string;
@@ -115,8 +117,9 @@ export function createContract(input: CreateContractInput): Contract {
     id: contractId,
     developerAddress: input.developerAddress,
     filename: input.filename,
-    sourceHash: `mock-sha256-${contractId}`,
-    sourceReference: `mock://sources/${contractId}/${input.filename}`,
+    sourceHash: input.sourceHash,
+    // Same storage key format as the API (apps/api/src/contracts/service.ts).
+    sourceReference: `contracts/${contractId}/${input.sourceHash}.sol`,
     bountyId,
     status: "Open",
     createdAt: now,

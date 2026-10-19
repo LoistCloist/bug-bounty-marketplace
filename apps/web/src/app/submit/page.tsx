@@ -4,17 +4,16 @@ import React from "react";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { CONTRACT_SOURCE_MAX_BYTES } from "@bbm/shared";
 import { developerApi, ApiError } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
-
-const MAX_FILE_BYTES = 102_400; // 100 KB
 
 function validateFile(file: File | null): string | null {
   if (!file) return "Choose a .sol file to submit.";
   if (!file.name.toLowerCase().endsWith(".sol")) {
     return "Only .sol files are accepted.";
   }
-  if (file.size > MAX_FILE_BYTES) {
+  if (file.size > CONTRACT_SOURCE_MAX_BYTES) {
     return "File is too large - the limit is 100 KB.";
   }
   return null;
