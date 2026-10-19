@@ -54,7 +54,7 @@ NEXT_PUBLIC_API_MOCKING=enabled pnpm dev
 ```
 
 With mocking enabled the frontend runs entirely against MSW mock handlers
-(`apps/web/mocks/handlers/{developer,auditor,arbiter}.ts`), so the full
+(`apps/web/src/mocks/handlers/{developer,auditor,arbiter}.ts`), so the full
 developer → auditor → arbiter flow can be exercised without a live API,
 database, or blockchain.
 
@@ -63,6 +63,21 @@ database, or blockchain.
 ```sh
 pnpm --filter @bbm/api dev
 ```
+
+Environment variables (all optional):
+
+| Variable | Effect when unset |
+| --- | --- |
+| `PORT` | Listens on 3001. |
+| `DATABASE_URL` | Contracts are held in memory. When set, the API connects to Postgres 16 and applies `apps/api/src/db/migrations` on boot. |
+| `SOURCE_STORAGE_DIR` | Uploaded `.sol` bytes are held in memory. When set, they are written under this directory. |
+
+Contract submission is `POST /api/contracts` as `multipart/form-data`, with
+fields `file` (a `.sol` file, at most 100 KB), `developerAddress`,
+`bountyAmount`, `currency` (default `ETH`) and `deadline`. It returns `201`
+with the `Contract`, including `sourceHash` (sha256 of the bytes) and
+`sourceReference` (`contracts/<id>/<sha256>.sol`). Errors: `400` for invalid
+fields (with an `issues` list), `413` for an oversize file.
 
 ### Running contract tests
 
