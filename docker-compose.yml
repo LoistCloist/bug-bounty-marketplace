@@ -1,8 +1,22 @@
-# Placeholder compose file. Nothing here is runnable yet — this just
-# reserves the shape of local dev infrastructure for later branches.
+# Local dev infrastructure. Only Postgres is enabled; the other services are
+# reserved for later branches.
+#
+#   docker compose up -d db
+#   DATABASE_URL=postgres://bbm:bbm@localhost:5432/bbm pnpm --filter @bbm/api dev
 version: "3.9"
 
-services: {}
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=bbm
+      - POSTGRES_PASSWORD=bbm
+      - POSTGRES_DB=bbm
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
   # web:
   #   build:
   #     context: ./apps/web
@@ -19,22 +33,11 @@ services: {}
   #   depends_on:
   #     - db
 
-  # db:
-  #   image: postgres:16-alpine
-  #   environment:
-  #     - POSTGRES_USER=bbm
-  #     - POSTGRES_PASSWORD=bbm
-  #     - POSTGRES_DB=bbm
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - db-data:/var/lib/postgresql/data
-
   # analysis:
   #   build:
   #     context: ./workers/analysis
   #   depends_on:
   #     - db
 
-# volumes:
-#   db-data:
+volumes:
+  db-data:
