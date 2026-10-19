@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   AuditorProfileSchema,
   BountySchema,
+  CONTRACT_SOURCE_MAX_BYTES,
   ContractSchema,
+  ContractSourceFilenameSchema,
+  ContractSourceSizeSchema,
+  ContractSubmissionFieldsSchema,
   DisputeSchema,
   FindingSchema,
   FindingStatusSchema,
@@ -19,7 +23,7 @@ describe("ContractSchema", () => {
     developerAddress: address,
     filename: "Vault.sol",
     sourceHash: "0xdeadbeef",
-    sourceReference: "s3://bucket/Vault.sol",
+    sourceReference: "contracts/contract_1/0xdeadbeef.sol",
     bountyId: "bounty_1",
     status: "Open",
     createdAt: now,
@@ -41,6 +45,68 @@ describe("ContractSchema", () => {
 
   it("rejects a malformed address", () => {
     expect(ContractSchema.safeParse({ ...valid, developerAddress: "not-an-address" }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe("ContractSourceFilenameSchema", () => {
+  it("accepts a .sol filename, case-insensitively", () => {
+    expect(ContractSourceFilenameSchema.safeParse("Vault.sol").success).toBe(true);
+    expect(ContractSourceFilenameSchema.safeParse("VAULT.SOL").success).toBe(true);
+  });
+
+  it("rejects other extensions and a bare .sol-looking suffix", () => {
+    expect(ContractSourceFilenameSchema.safeParse("Vault.txt").success).toBe(false);
+    expect(ContractSourceFilenameSchema.safeParse("Vault.sol.exe").success).toBe(false);
+    expect(ContractSourceFilenameSchema.safeParse("").success).toBe(false);
+  });
+});
+
+describe("ContractSourceSizeSchema", () => {
+  it("accepts sizes from 1 byte up to the limit", () => {
+    expect(ContractSourceSizeSchema.safeParse(1).success).toBe(true);
+    expect(ContractSourceSizeSchema.safeParse(CONTRACT_SOURCE_MAX_BYTES).success).toBe(true);
+  });
+
+  it("rejects an empty file and a file over the limit", () => {
+    expect(ContractSourceSizeSchema.safeParse(0).success).toBe(false);
+    expect(ContractSourceSizeSchema.safeParse(CONTRACT_SOURCE_MAX_BYTES + 1).success).toBe(false);
+  });
+});
+
+describe("ContractSubmissionFieldsSchema", () => {
+  const valid = {
+    developerAddress: address,
+    bountyAmount: "2.5",
+    currency: "USDC",
+    deadline: later,
+  };
+
+  it("coerces a multipart string amount to a number", () => {
+    const parsed = ContractSubmissionFieldsSchema.parse(valid);
+    expect(parsed.bountyAmount).toBe(2.5);
+  });
+
+  it("defaults the currency to ETH when omitted", () => {
+    const { currency: _currency, ...withoutCurrency } = valid;
+    expect(ContractSubmissionFieldsSchema.parse(withoutCurrency).currency).toBe("ETH");
+  });
+
+  it("rejects a non-positive or non-numeric bounty amount", () => {
+    expect(ContractSubmissionFieldsSchema.safeParse({ ...valid, bountyAmount: "0" }).success).toBe(
+      false,
+    );
+    expect(ContractSubmissionFieldsSchema.safeParse({ ...valid, bountyAmount: "abc" }).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects a malformed developer address and a non-datetime deadline", () => {
+    expect(
+      ContractSubmissionFieldsSchema.safeParse({ ...valid, developerAddress: "0x123" }).success,
+    ).toBe(false);
+    expect(ContractSubmissionFieldsSchema.safeParse({ ...valid, deadline: "soon" }).success).toBe(
       false,
     );
   });
