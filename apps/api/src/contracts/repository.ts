@@ -37,6 +37,9 @@ export interface ContractRepository {
     expiresAt: Date,
     now: Date,
   ): Promise<ClaimResult>;
+  /** Rolls back a claim this auditor holds, reopening the contract. A no-op
+   * when the auditor no longer holds it. Used when the on-chain lock fails. */
+  releaseClaim(contractId: string, auditorId: string): Promise<void>;
   /** Contracts open to claim (including expired claims), with their bounty. */
   listQueue(now: Date): Promise<QueueItem[]>;
   findActiveClaim(contractId: string, now: Date): Promise<ActiveClaim | null>;

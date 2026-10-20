@@ -4,6 +4,7 @@ import { MemoryContractRepository } from "./contracts/memory-repository.js";
 import type { ContractRepository } from "./contracts/repository.js";
 import { registerContractRoutes, CONTRACT_MULTIPART_LIMITS } from "./contracts/routes.js";
 import { MemorySourceStorage, type SourceStorage } from "./contracts/storage.js";
+import type { AuditorStakingPort } from "./chain/auditor-staking.js";
 import { loadPipelineConfig, type PipelineConfig } from "./pipeline/config.js";
 import { MemoryPipelineRepository, MemoryStore } from "./pipeline/memory-repository.js";
 import type { PipelineRepository } from "./pipeline/repository.js";
@@ -22,6 +23,8 @@ export interface AppOptions {
   storage?: SourceStorage;
   /** Defaults to loadPipelineConfig() (env vars, real clock). */
   config?: PipelineConfig;
+  /** Omit when no chain is configured; claims then skip the on-chain lock. */
+  auditorStaking?: AuditorStakingPort;
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -39,7 +42,13 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
 
   void app.register(multipart, { limits: CONTRACT_MULTIPART_LIMITS });
   registerContractRoutes(app, { repository, storage, now: config.now });
-  registerPipelineRoutes(app, { contracts: repository, pipeline, storage, config });
+  registerPipelineRoutes(app, {
+    contracts: repository,
+    pipeline,
+    storage,
+    config,
+    auditorStaking: options.auditorStaking,
+  });
 
   return app;
 }

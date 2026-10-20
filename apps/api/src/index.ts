@@ -1,5 +1,7 @@
 import { Pool } from "pg";
 import { buildApp } from "./app.js";
+import { createAuditorStakingFromConfig } from "./chain/clients.js";
+import { loadChainConfig } from "./chain/config.js";
 import { PgContractRepository } from "./contracts/pg-repository.js";
 import { PgPipelineRepository } from "./pipeline/pg-repository.js";
 import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
@@ -18,10 +20,14 @@ const pool = databaseUrl
   ? new Pool({ connectionString: databaseUrl, max: parseIntEnv(process.env.PG_POOL_MAX, 5) })
   : undefined;
 
+// CHAIN_RPC_URL selects the chain; without it claims skip the on-chain lock.
+const chainConfig = loadChainConfig(process.env);
+
 const app = buildApp({
   repository: pool ? new PgContractRepository(pool) : undefined,
   pipeline: pool ? new PgPipelineRepository(pool) : undefined,
   storage: storageDir ? new LocalSourceStorage(storageDir) : new MemorySourceStorage(),
+  auditorStaking: chainConfig ? createAuditorStakingFromConfig(chainConfig) : undefined,
 });
 const port = Number(process.env.PORT ?? 3001);
 

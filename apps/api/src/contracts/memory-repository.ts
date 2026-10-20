@@ -64,6 +64,14 @@ export class MemoryContractRepository implements ContractRepository {
     return { ok: true, contract: { ...stored.contract } };
   }
 
+  async releaseClaim(contractId: string, auditorId: string): Promise<void> {
+    const stored = this.store.contracts.get(contractId);
+    if (!stored || stored.claimedByAuditorId !== auditorId) return;
+    stored.contract.status = "Open";
+    stored.claimedByAuditorId = null;
+    stored.claimExpiresAt = null;
+  }
+
   async listQueue(now: Date): Promise<QueueItem[]> {
     const items: QueueItem[] = [];
     for (const stored of this.store.contracts.values()) {

@@ -9,6 +9,7 @@ import {
 import type { ContractRepository, QueueItem } from "../contracts/repository.js";
 import type { SourceStorage } from "../contracts/storage.js";
 import { readMultipart } from "../http/multipart.js";
+import type { AuditorStakingPort } from "../chain/auditor-staking.js";
 import type { PipelineConfig } from "./config.js";
 import type { PipelineRepository } from "./repository.js";
 
@@ -17,7 +18,12 @@ export interface PipelineRouteDeps {
   pipeline: PipelineRepository;
   storage: SourceStorage;
   config: PipelineConfig;
+  /** Present only when a chain is configured. Claims lock the auditor's stake
+   * on-chain; without it claims are local only. */
+  auditorStaking?: AuditorStakingPort;
 }
+
+const ADDRESS = /^0x[a-fA-F0-9]{40}$/;
 
 const QUEUE_SORTS = ["deadline", "bounty", "newest"] as const;
 type QueueSort = (typeof QUEUE_SORTS)[number];
@@ -39,7 +45,7 @@ export function pocStorageKey(pocId: string, sha256: string): string {
 /** Routes backed by the analysis pipeline: findings, analysis status, the
  * auditor queue and claims, and PoC submission. */
 export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRouteDeps): void {
-  const { contracts, pipeline, storage, config } = deps;
+  const { contracts, pipeline, storage, config, auditorStaking } = deps;
 
   app.get<{ Params: { id: string } }>("/api/contracts/:id/findings", async (request, reply) => {
     const now = config.now();
@@ -80,12 +86,34 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       ) {
         return reply.code(400).send({ error: "contractId and auditorId are required" });
       }
+      // With a chain configured, the auditorId is the auditor's on-chain
+      // address, so reject anything else before the claim is written.
+      if (auditorStaking && !ADDRESS.test(auditorId)) {
+        return reply.code(400).send({ error: "auditorId must be a 0x-prefixed address" });
+      }
       const now = config.now();
       const expiresAt = new Date(now.getTime() + config.claimWindowSeconds * 1000);
       const result = await contracts.claimContract(contractId, auditorId, expiresAt, now);
-      if (result.ok) return result.contract;
-      if (result.reason === "not_found") return reply.code(404).send({ error: "Not found" });
-      return reply.code(409).send({ error: `Contract ${contractId} is not open to claim` });
+      if (!result.ok) {
+        if (result.reason === "not_found") return reply.code(404).send({ error: "Not found" });
+        return reply.code(409).send({ error: `Contract ${contractId} is not open to claim` });
+      }
+      if (!auditorStaking) return result.contract;
+
+      // Claim first (the repository decides the race), then lock. If the lock
+      // fails, roll the claim back so the contract reopens and no unlocked
+      // claim is left standing. If the rollback itself fails, the claim still
+      // expires after the claim window.
+      try {
+        await auditorStaking.lockSubmission(auditorId as `0x${string}`);
+      } catch (err) {
+        request.log.error({ err, contractId, auditorId }, "lockSubmission failed; releasing claim");
+        await contracts.releaseClaim(contractId, auditorId).catch((releaseErr: unknown) => {
+          request.log.error({ err: releaseErr, contractId, auditorId }, "releaseClaim failed");
+        });
+        return reply.code(502).send({ error: "Could not lock the auditor stake on-chain; claim not applied" });
+      }
+      return result.contract;
     },
   );
 

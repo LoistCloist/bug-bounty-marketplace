@@ -37,6 +37,7 @@ describeRepositories(
       findContractById: (id, now) => repo.findContractById(id, now),
       listContracts: (filter, now) => repo.listContracts(filter, now),
       claimContract: (...args) => repo.claimContract(...args),
+      releaseClaim: (id, auditorId) => repo.releaseClaim(id, auditorId),
       listQueue: (now) => repo.listQueue(now),
       findActiveClaim: (id, now) => repo.findActiveClaim(id, now),
     };
