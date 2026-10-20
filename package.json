@@ -11,7 +11,11 @@
     "typecheck": "pnpm -r --if-present run typecheck",
     "test": "pnpm -r --if-present run test",
     "build": "pnpm -r --if-present run build",
-    "dev": "pnpm --filter @bbm/web dev"
+    "dev": "pnpm --filter @bbm/web dev",
+    "stack:up": "docker compose up -d --build --wait",
+    "stack:down": "docker compose down -v",
+    "stack:ci": "docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait --no-build db api web analysis anvil",
+    "stack:deploy-contracts": "docker compose run --rm contracts-deploy"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -38,3 +38,4 @@ broadcast/
 !.vscode/extensions.json
 .idea/
 .worktrees/
+.ci/
