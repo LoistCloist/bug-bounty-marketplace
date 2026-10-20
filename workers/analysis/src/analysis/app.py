@@ -31,8 +31,21 @@ from analysis.worker import run as run_worker
 log = logging.getLogger("analysis.app")
 
 
+def _configure_logging() -> None:
+    """uvicorn only configures its own loggers; without this every
+    `analysis.*` message (poller started, jobs claimed and analysed) is lost."""
+    logger = logging.getLogger("analysis")
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    _configure_logging()
     # Local convenience: pick up workers/analysis/.env (e.g. LLM_API_KEY).
     if os.environ.get("ANALYSIS_LOAD_DOTENV", "1") != "0":
         load_dotenv(Settings.dotenv_path(), os.environ)
@@ -68,7 +81,8 @@ class AnalyzeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     contractId: str = Field(min_length=1)  # camelCase matches the shared schemas
-    source: str = Field(min_length=1)
+    # Same 100 KB cap the API puts on uploads.
+    source: str = Field(min_length=1, max_length=102_400)
 
 
 @app.get("/health")

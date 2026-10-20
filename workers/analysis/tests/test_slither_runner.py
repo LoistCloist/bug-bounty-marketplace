@@ -149,3 +149,11 @@ def test_real_slither_on_a_filename_with_spaces():
     source = (FIXTURES / "Vault.sol").read_bytes()
     checks = {r.check for r in parse_detectors(run_slither(source, "My Vault.sol", "0.8.28"))}
     assert "reentrancy-eth" in checks
+
+
+@pytest.mark.slither
+@pytest.mark.parametrize("name", ["Vault.SOL", "x=y.sol"])
+def test_real_slither_accepts_odd_but_valid_upload_names(name):
+    source = (FIXTURES / "Vault.sol").read_bytes()
+    checks = {r.check for r in parse_detectors(run_slither(source, name, "0.8.28"))}
+    assert "reentrancy-eth" in checks

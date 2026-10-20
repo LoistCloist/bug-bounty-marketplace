@@ -80,3 +80,19 @@ def test_severity_for_unknown_raises():
 )
 def test_safe_filename(name, expected):
     assert safe_filename(name) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Vault.sol", "Vault.sol"),
+        ("My Vault.sol", "My Vault.sol"),
+        ("Vault.SOL", "Vault.sol"),
+        ("x=y.sol", "x_y.sol"),
+        ("../a=b.Sol", "a_b.sol"),
+    ],
+)
+def test_slither_filename_is_one_crytic_compile_and_solc_accept(name, expected):
+    from analysis.paths import slither_filename
+
+    assert slither_filename(name) == expected

@@ -69,9 +69,9 @@ class Settings:
 
     @property
     def job_kinds(self) -> tuple[str, ...]:
-        """Job kinds this worker claims. Sandbox jobs need Docker access, so
-        they are only taken when SANDBOX_ENABLED is set."""
-        return ("analysis", "sandbox") if self.sandbox_enabled else ("analysis",)
+        """Job kinds this worker claims. Sandbox jobs stay queued until the
+        sandbox runner is added."""
+        return ("analysis",)
 
     @property
     def llm_configured(self) -> bool:

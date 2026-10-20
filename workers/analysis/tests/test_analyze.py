@@ -79,3 +79,17 @@ def test_analyze_rejects_missing_fields(client) -> None:
 def test_analyze_rejects_unknown_fields(client) -> None:
     response = client.post("/analyze", json={"contractId": "c", "source": "s", "extra": True})
     assert response.status_code == 422
+
+
+def test_analyze_rejects_sources_over_100_kb(client):
+    response = client.post("/analyze", json={"contractId": "c", "source": "a" * 102_401})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["type"] == "string_too_long"
+
+
+def test_lifespan_makes_the_poller_logs_visible(client):
+    import logging
+
+    logger = logging.getLogger("analysis")
+    assert logger.getEffectiveLevel() <= logging.INFO
+    assert logger.handlers

@@ -51,8 +51,8 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Sockets stay disabled; tests that use the local Postgres (DATABASE_URL) get
-# the enable_socket marker from conftest.py, limited to loopback hosts.
+# Sockets stay disabled except to loopback (--allow-hosts), which the DB tests
+# use for the local Postgres in DATABASE_URL.
 addopts = "--disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1 -m 'not slither and not docker'"
 markers = [
     "slither: runs the real Slither binary (needs solc-select versions installed)",

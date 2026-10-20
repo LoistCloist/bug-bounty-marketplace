@@ -21,3 +21,15 @@ def safe_filename(name: str) -> str:
     if not stem.strip(" ._"):
         return "Contract.sol"
     return cleaned
+
+
+def slither_filename(name: str) -> str:
+    """The name to give the temp file Slither compiles.
+
+    crytic-compile only accepts a lowercase `.sol` extension, and solc reads an
+    `=` in a path as an import remapping, so both are normalised here. Only
+    Slither's temp file uses this; the sandbox keeps the displayed name, which
+    auditors import by.
+    """
+    base = safe_filename(name)
+    return base[: -len(".sol")].replace("=", "_") + ".sol"

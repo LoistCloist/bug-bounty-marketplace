@@ -31,6 +31,12 @@ image pre-installs them. A pragma no version satisfies fails with
 Locally, put these in `workers/analysis/.env` (git-ignored; see
 `.env.example`); the service and the compose stack read it.
 
+Run **one** poller per database. Every poller with `DATABASE_URL` set claims
+jobs; a host-run poller (e.g. `uv run uvicorn ...` with `.env`) next to the
+compose `analysis` service would claim jobs whose sources live in the compose
+volume and fail them as "Source file not found". Leave `DATABASE_URL` unset in
+`.env` when the compose stack is running.
+
 ## Develop
 
 Requires [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 for you).

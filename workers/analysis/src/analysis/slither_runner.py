@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .paths import safe_filename
+from .paths import slither_filename
 
 _STDERR_TAIL_CHARS = 2000
 
@@ -54,7 +54,7 @@ def run_slither(
     compile failure, a timeout, or a missing report.
     """
     with tempfile.TemporaryDirectory(prefix="bbm-slither-") as tmp:
-        target = Path(tmp) / safe_filename(filename)
+        target = Path(tmp) / slither_filename(filename)
         target.write_bytes(source)
         out = Path(tmp) / "out.json"
         # slither and the solc-select `solc` shim live next to this Python;

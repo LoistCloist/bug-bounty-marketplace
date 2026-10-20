@@ -51,9 +51,11 @@ def test_read_source_refuses_keys_outside_the_root(tmp_path: Path):
         read_source(tmp_path, "../outside.sol")
 
 
-def test_settings_claim_sandbox_jobs_only_when_enabled():
+def test_settings_only_claim_analysis_jobs_until_the_sandbox_lands():
+    # Sandbox jobs are left queued for the sandbox runner (next PR) instead
+    # of being claimed and failed here.
     assert Settings.from_env({}).job_kinds == ("analysis",)
-    assert Settings.from_env({"SANDBOX_ENABLED": "true"}).job_kinds == ("analysis", "sandbox")
+    assert Settings.from_env({"SANDBOX_ENABLED": "true"}).job_kinds == ("analysis",)
 
 
 def test_run_keeps_polling_after_a_database_error(monkeypatch, tmp_path):
@@ -93,3 +95,34 @@ def test_run_keeps_polling_after_a_database_error(monkeypatch, tmp_path):
     )
     main.run(settings, stop)
     assert calls == [("analysis",), ("analysis",)]
+
+
+def test_handle_never_raises_when_recording_the_failure_fails(
+    pg_conn, tmp_path, monkeypatch, test_database_url, caplog
+):
+    import logging
+
+    import psycopg
+
+    insert_job(pg_conn, "analysis", "contract_a")
+    job = claim_next(pg_conn, 600, 3)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    def broken_fail(*args, **kwargs):
+        raise psycopg.OperationalError("connection lost")
+
+    monkeypatch.setattr(main, "run_analysis_job", boom)
+    monkeypatch.setattr(main, "fail", broken_fail)
+    with caplog.at_level(logging.ERROR, logger="analysis"):
+        main.handle(job, _settings(tmp_path, test_database_url), explainer=None)
+    assert "could not record" in caplog.text
+
+
+def test_load_dotenv_strips_matching_quotes(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text('A="quoted value"\nB=\'single\'\nC="unbalanced\n')
+    env: dict[str, str] = {}
+    main.load_dotenv(env_file, env)
+    assert env == {"A": "quoted value", "B": "single", "C": '"unbalanced'}

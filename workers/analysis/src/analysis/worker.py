@@ -36,13 +36,24 @@ def load_dotenv(path: Path, env: MutableMapping[str, str]) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.removeprefix("export ").split("=", 1)
-        key = key.strip()
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
         if key and key not in env:
-            env[key] = value.strip()
+            env[key] = value
 
 
 def handle(job: Job, settings: Settings, explainer: Explainer | None) -> None:
-    """Runs one job on its own connection and records any failure. Never raises."""
+    """Runs one job on its own connection and records any failure. Never
+    raises: if the database is unreachable the job's lease expires and it is
+    retried, and the error is logged."""
+    try:
+        _handle(job, settings, explainer)
+    except Exception:
+        log.exception("job %s could not be run", job.id)
+
+
+def _handle(job: Job, settings: Settings, explainer: Explainer | None) -> None:
     with connect(settings.database_url) as conn:
         try:
             if job.kind == "analysis":
@@ -54,13 +65,17 @@ def handle(job: Job, settings: Settings, explainer: Explainer | None) -> None:
             outcome = JobOutcome(ok=False, reason=f"{type(err).__name__}: {err}", retryable=True)
         if not outcome.ok:
             log.warning("job %s (%s) failed: %s", job.id, job.kind, outcome.reason)
-            fail(
-                conn,
-                job,
-                outcome.reason or "unknown error",
-                outcome.retryable,
-                settings.job_max_attempts,
-            )
+            try:
+                fail(
+                    conn,
+                    job,
+                    outcome.reason or "unknown error",
+                    outcome.retryable,
+                    settings.job_max_attempts,
+                )
+            except Exception:
+                # The lease expires and the job is retried; just don't lose it silently.
+                log.exception("could not record the failure of job %s", job.id)
 
 
 def run(settings: Settings, stop: threading.Event, explainer: Explainer | None = None) -> None:
