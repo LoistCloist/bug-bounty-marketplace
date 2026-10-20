@@ -30,18 +30,19 @@ describe("parseIntEnv", () => {
 });
 
 describe("resolveMigrationsDir", () => {
-  const moduleUrl = pathToFileURL(path.join(path.sep, "app", "dist", "index.js")).href;
+  // Absolute paths built with path.resolve so the expectations hold on Windows (drive letter) and POSIX.
+  const moduleUrl = pathToFileURL(path.resolve(path.sep, "app", "dist", "index.js")).href;
 
   it("defaults to a migrations dir next to the running module", () => {
     expect(resolveMigrationsDir(undefined, moduleUrl)).toBe(
-      path.join(path.sep, "app", "dist", "migrations"),
+      path.resolve(path.sep, "app", "dist", "migrations"),
     );
   });
 
   it("matches src/db/migrations when running from source", () => {
-    const srcUrl = pathToFileURL(path.join(path.sep, "app", "src", "db", "migrate.ts")).href;
+    const srcUrl = pathToFileURL(path.resolve(path.sep, "app", "src", "db", "migrate.ts")).href;
     expect(resolveMigrationsDir("", srcUrl)).toBe(
-      path.join(path.sep, "app", "src", "db", "migrations"),
+      path.resolve(path.sep, "app", "src", "db", "migrations"),
     );
   });
 
