@@ -25,7 +25,7 @@ infra/terraform/
     test/, preview/      aca.tfvars, backend.hcl (state key from $TF_STATE_KEY)
   scripts/
     tf.sh                wrapper: picks stack dir, var-file, backend config and state key
-    janitor.sh           deletes expired ephemeral ACA resources, stale test state, old images
+    janitor.sh           deletes expired ephemeral ACA resources and stale test state
 ```
 
 Later branches add the `data` and `compute` stacks, their modules, the
@@ -183,14 +183,16 @@ Inputs come from `envs/<kind>/aca.tfvars` plus `TF_VAR_*` set by the workflow:
 | `TF_VAR_env_name` | `run-${{ github.run_id }}-${{ github.run_attempt }}` | `pr-<n>` |
 | `TF_VAR_image_tag` | `sha-<7>` | `pr-<n>-sha-<7>` |
 | `TF_VAR_web_image_tag` | (unset, so `image_tag`) | `pr-<n>-sha-<7>-mocked` |
-| `TF_VAR_tfstate_resource_group` | `vars.TFSTATE_RG` | same |
-| `TF_VAR_tfstate_account` | `vars.TFSTATE_ACCOUNT` | same |
+| `TFSTATE_RG` / `TFSTATE_ACCOUNT` | `vars.TFSTATE_RG` / `vars.TFSTATE_ACCOUNT` | same |
 | `TF_STATE_KEY` | `test/run-<run_id>-<attempt>.tfstate` | `preview/pr-<n>.tfstate` |
 
 `tfstate_resource_group` and `tfstate_account` tell the stack where to read
-`global.tfstate` (ACR login server, LAW ID, pull identity, suffix). `tf.sh`
-only passes `TFSTATE_RG` / `TFSTATE_ACCOUNT` to the backend, so the workflow
-also sets these two `TF_VAR_`s.
+`global.tfstate` (ACR login server, LAW ID, pull identity, suffix). The
+workflow does not set them as `TF_VAR_`s: `tf.sh` exports
+`TF_VAR_tfstate_resource_group` / `TF_VAR_tfstate_account` from `TFSTATE_RG` /
+`TFSTATE_ACCOUNT` (see above). `tfstate_resource_group` defaults to
+`rg-bbm-tfstate-eus2`; `tfstate_account` has no default, so a run without
+`TFSTATE_ACCOUNT` fails at plan time with a pointer to it.
 
 Outputs: `web_url`, `api_url` (both `https://...`), `resource_group`, `environment_name`.
 
@@ -213,9 +215,15 @@ WEB_URL=$(./scripts/tf.sh aca-ephemeral test output -raw web_url)
 dry run by default. `--apply` deletes container apps, then managed
 environments, in `rg-bbm-{test,preview}-eus2` that are tagged
 `ephemeral=true` and past `expires_on`. It also deletes `test/` state blobs
-older than 24 hours in `$TFSTATE_ACCOUNT`. `--acr-purge` (needs `$ACR_NAME`)
-removes `bbm/*` tags `pr-*` and `sha-*` older than 30 days, keeping the 10
-newest per repository, plus untagged manifests. Requires `az login`.
+older than 24 hours in `$TFSTATE_ACCOUNT`. Requires `az login`; any `az`
+listing failure (auth, throttling) fails the run.
+
+The janitor does not touch ACR. The image purge is a separate job in
+`infra-janitor.yml` that runs as `gh-bbm-global` in the reviewer-gated
+`infra-global` environment. It first delete-locks the staging/prod
+`bbm-last-deployed-tag` tags, then runs `acr purge --filter 'bbm/.*:pr-.*'
+--filter 'bbm/.*:sha-.*' --ago 30d --keep 10 --untagged`, and fails closed if
+the protected tags cannot be locked.
 
 ## Static checks (no Azure credentials needed)
 
