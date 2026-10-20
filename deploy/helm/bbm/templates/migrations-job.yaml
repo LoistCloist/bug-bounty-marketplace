@@ -1,0 +1,80 @@
+{{- /*
+Database migrations as a pre-install/pre-upgrade hook (weight -5), using
+the api image: `node dist/migrate-cli.js`.
+
+Hook ordering (all pre-install,pre-upgrade):
+  -10  ServiceAccount bbm-migrations                       (serviceaccounts.yaml)
+  -10  Secret bbm-secrets-migrations       (provider=plain) (secret.yaml)
+  -10  SecretProviderClass bbm-kv-migrations (provider=csi) (secretproviderclass.yaml)
+   -5  Job bbm-migrations                                   (this file)
+Hook resources are created before any regular release resource, so the Job
+must never depend on a non-hook object (ConfigMap, bbm-secrets, bbm-kv).
+*/ -}}
+{{- if .Values.migrations.enabled }}
+{{- $v := .Values.migrations -}}
+{{- $name := include "bbm.componentName" (dict "root" $ "component" "migrations") -}}
+{{- $csi := include "bbm.csi" . -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "migrations") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $v.backoffLimit }}
+  activeDeadlineSeconds: {{ $v.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "bbm.labels" (dict "root" $ "component" "migrations") | nindent 8 }}
+        {{- if include "bbm.useWorkloadIdentity" (dict "root" $ "clientId" .Values.azure.migrationsClientId) }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      {{- with (include "bbm.imagePullSecrets" . | trim) }}{{ . | nindent 6 }}{{- end }}
+      {{- include "bbm.podSecurityContext" (dict "uid" .Values.api.runAsUser "gid" .Values.api.runAsGroup) | nindent 6 }}
+      {{- with (include "bbm.nodeSelector" (dict "root" $ "values" .Values.api) | trim) }}{{ . | nindent 6 }}{{- end }}
+      {{- with (include "bbm.tolerations" (dict "root" $ "values" .Values.api) | trim) }}{{ . | nindent 6 }}{{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "bbm.image" (dict "root" $ "image" .Values.api.image) }}
+          imagePullPolicy: {{ include "bbm.imagePullPolicy" (dict "root" $ "image" .Values.api.image) }}
+          command: ["node", "dist/migrate-cli.js"]
+          env:
+            - name: NODE_ENV
+              value: {{ .Values.config.nodeEnv | quote }}
+            {{- with .Values.api.migrationsDir }}
+            - name: MIGRATIONS_DIR
+              value: {{ . | quote }}
+            {{- end }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbm.migrationsSecretName" . }}
+                  key: database-url
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          {{- include "bbm.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if $csi }}
+            - name: secrets-store
+              mountPath: {{ .Values.secrets.csi.mountPath }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if $csi }}
+        {{- include "bbm.csiVolume" (dict "spc" (printf "%s-migrations" .Values.secrets.csi.secretProviderClassName)) | nindent 8 }}
+        {{- end }}
+{{- end }}

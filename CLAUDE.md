@@ -41,8 +41,9 @@ cd contracts && forge build && forge test
   `tsconfig.base.json` (`strict: true`, `esModuleInterop`, `skipLibCheck`,
   `forceConsistentCasingInFileNames`, `target: ES2022`,
   `moduleResolution: bundler` by default — individual packages may override
-  module resolution if their runtime requires it, e.g. `apps/api` uses
-  `NodeNext`).
+  module resolution if their runtime requires it. `apps/api` also uses
+  `bundler` resolution: `tsc` only typechecks it, and `apps/api/build.mjs`
+  bundles it with esbuild into `dist/` for `node dist/index.js`).
 - **Conventional Commits** for every commit (`feat:`, `fix:`, `chore:`,
   `docs:`, `refactor:`, `test:`, etc.), small and scoped.
 - **pnpm workspaces** cover `apps/*` and `packages/*` only. `workers/*` is

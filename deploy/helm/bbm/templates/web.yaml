@@ -1,0 +1,151 @@
+{{- $v := .Values.web -}}
+{{- $name := include "bbm.componentName" (dict "root" $ "component" "web") -}}
+{{- $apiName := include "bbm.componentName" (dict "root" $ "component" "api") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "web") | nindent 4 }}
+spec:
+  {{- if not $v.hpa.enabled }}
+  replicas: {{ $v.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "bbm.selectorLabels" (dict "root" $ "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bbm.labels" (dict "root" $ "component" "web") | nindent 8 }}
+        {{- with $v.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "bbm.checksums" . | nindent 8 }}
+        {{- with $v.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      {{- with (include "bbm.imagePullSecrets" . | trim) }}{{ . | nindent 6 }}{{- end }}
+      {{- include "bbm.podSecurityContext" (dict "uid" $v.runAsUser "gid" $v.runAsGroup) | nindent 6 }}
+      {{- with (include "bbm.scheduling" (dict "root" $ "values" $v "component" "web") | trim) }}{{ . | nindent 6 }}{{- end }}
+      containers:
+        - name: web
+          image: {{ include "bbm.image" (dict "root" $ "image" $v.image) }}
+          imagePullPolicy: {{ include "bbm.imagePullPolicy" (dict "root" $ "image" $v.image) }}
+          ports:
+            - name: http
+              containerPort: {{ $v.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "bbm.fullname" . }}-config
+          env:
+            - name: PORT
+              value: {{ $v.port | quote }}
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: API_INTERNAL_URL
+              value: {{ printf "http://%s:%v" $apiName .Values.api.port | quote }}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          {{- include "bbm.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if $v.nextCacheDir }}
+            - name: next-cache
+              mountPath: {{ $v.nextCacheDir }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if $v.nextCacheDir }}
+        - name: next-cache
+          emptyDir:
+            sizeLimit: 512Mi
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "web") | nindent 4 }}
+spec:
+  type: {{ $v.service.type }}
+  selector:
+    {{- include "bbm.selectorLabels" (dict "root" $ "component" "web") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $v.port }}
+      targetPort: http
+      protocol: TCP
+{{- if $v.hpa.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "web") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $name }}
+  minReplicas: {{ $v.hpa.minReplicas }}
+  maxReplicas: {{ $v.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $v.hpa.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- if and $v.pdb.enabled (gt (int (include "bbm.minReplicas" $v)) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "web") | nindent 4 }}
+spec:
+  minAvailable: {{ $v.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "bbm.selectorLabels" (dict "root" $ "component" "web") | nindent 6 }}
+{{- end }}

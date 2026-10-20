@@ -1,43 +1,106 @@
-# Local dev infrastructure. Only Postgres is enabled; the other services are
-# reserved for later branches.
+# Full local stack, built from the repo's Dockerfiles.
 #
+#   pnpm stack:up                         # build + start, wait for healthchecks
+#   docker compose run --rm contracts-deploy   # deploy contracts to local anvil
+#   pnpm stack:down                       # stop and remove volumes
+#
+# Just the database (for `pnpm --filter @bbm/api dev`):
 #   docker compose up -d db
 #   DATABASE_URL=postgres://bbm:bbm@localhost:5432/bbm pnpm --filter @bbm/api dev
-version: "3.9"
+#
+# Images are tagged ${BBM_REGISTRY:-bbm}/<svc>:${BBM_TAG:-local}, so CI can
+# build them once and run this file with --no-build.
+
+name: bbm
 
 services:
   db:
     image: postgres:16-alpine
     environment:
-      - POSTGRES_USER=bbm
-      - POSTGRES_PASSWORD=bbm
-      - POSTGRES_DB=bbm
+      POSTGRES_USER: bbm
+      POSTGRES_PASSWORD: bbm
+      POSTGRES_DB: bbm
     ports:
       - "5432:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bbm -d bbm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-  # web:
-  #   build:
-  #     context: ./apps/web
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     - NEXT_PUBLIC_API_MOCKING=enabled
+  api:
+    image: ${BBM_REGISTRY:-bbm}/api:${BBM_TAG:-local}
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgres://bbm:bbm@db:5432/bbm
+      SOURCE_STORAGE_DIR: /data/sources
+    ports:
+      - "3001:3001"
+    volumes:
+      - sources:/data/sources
+    depends_on:
+      db:
+        condition: service_healthy
 
-  # api:
-  #   build:
-  #     context: ./apps/api
-  #   ports:
-  #     - "3001:3001"
-  #   depends_on:
-  #     - db
+  web:
+    image: ${BBM_REGISTRY:-bbm}/web:${BBM_TAG:-local}
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # Inlined at build time; "enabled" serves the MSW mocks in the browser.
+        NEXT_PUBLIC_API_MOCKING: ${NEXT_PUBLIC_API_MOCKING:-disabled}
+    environment:
+      API_INTERNAL_URL: http://api:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
 
-  # analysis:
-  #   build:
-  #     context: ./workers/analysis
-  #   depends_on:
-  #     - db
+  analysis:
+    image: ${BBM_REGISTRY:-bbm}/analysis:${BBM_TAG:-local}
+    build:
+      context: workers/analysis
+    ports:
+      - "8000:8000"
+
+  anvil:
+    image: ${BBM_REGISTRY:-bbm}/contracts:${BBM_TAG:-local}
+    build:
+      context: contracts
+    ports:
+      - "8545:8545"
+
+  # One-shot: deploys and wires the contracts on the local anvil chain, then
+  # writes addresses to /contracts/deployments/31337.json. Run it with
+  # `docker compose run --rm contracts-deploy` (not `up --wait`, which treats
+  # an exited one-shot as unhealthy).
+  contracts-deploy:
+    image: ${BBM_REGISTRY:-bbm}/contracts:${BBM_TAG:-local}
+    profiles: ["deploy"]
+    entrypoint:
+      - forge
+      - script
+      - script/Deploy.s.sol
+      - --rpc-url
+      - http://anvil:8545
+      - --broadcast
+    environment:
+      # anvil's well-known dev account #0. Local/CI only; never use elsewhere.
+      DEPLOYER_PRIVATE_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    volumes:
+      - deployments:/contracts/deployments
+    depends_on:
+      anvil:
+        condition: service_healthy
+    restart: "no"
 
 volumes:
   db-data:
+  sources:
+  deployments:

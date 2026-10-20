@@ -18,12 +18,15 @@ What bootstrap creates (`infra/terraform/stacks/bootstrap`):
   - `rg-bbm-<env>-data-eus2` and `rg-bbm-<env>-compute-eus2` for staging and prod.
 - Resource provider registrations.
 - The GitHub OIDC app registrations (`gh-bbm-plan`, `gh-bbm-ephemeral`, `gh-bbm-global`,
-  `gh-bbm-staging`, `gh-bbm-prod`), their federated credentials and role assignments, plus the
-  custom role `BBM Power Operator`.
+  `gh-bbm-staging`, `gh-bbm-prod`, `gh-bbm-prod-power`), their federated credentials and role
+  assignments, plus the custom roles `BBM Power Operator`, `BBM tfstate writer` and
+  `BBM tfstate reader`. Each CI identity's state access is limited to its own state keys by ABAC
+  conditions (see the
+  [ADR](../adr/0001-azure-environment-topology.md#4-github-to-azure-over-oidc)).
 - The $50/month subscription budget.
 
 Then `stacks/global` adds the ACR, the shared Log Analytics workspace, `id-bbm-aca-pull`, the shared
-Key Vault and per-RG budgets.
+Key Vault (no secrets: you set those with `az` in step 12) and per-RG budgets.
 
 All commands below run from `infra/terraform` unless a step says otherwise.
 
@@ -158,7 +161,10 @@ everything.
 | `preregistered_resource_providers` | the list from step 3                                                        |
 
 The account that runs the apply automatically gets Storage Blob Data Contributor on the state
-container, alongside `admin_object_ids`.
+container, alongside `admin_object_ids`. These human grants are unconditioned; they are the only
+principals that can read or write `bootstrap.tfstate` and `prod/` from outside the `prod` environment,
+and the only ones that can create or delete the container. CI identities get the custom
+`BBM tfstate writer` / `BBM tfstate reader` roles instead (see `infra/terraform/README.md`).
 
 ## 6. Apply bootstrap (local state)
 
@@ -187,7 +193,9 @@ If the apply fails with "already registered" for a provider, add that namespace 
    ./scripts/tf.sh bootstrap global init -migrate-state
    ```
 
-   `tf.sh` adds `-backend-config=envs/global/backend.hcl -backend-config=key=bootstrap.tfstate`.
+   `tf.sh` adds `-backend-config=envs/global/backend.hcl -backend-config=key=bootstrap.tfstate`, and
+   leaves out `-input=false` for `-migrate-state` / `-reconfigure` so the prompt works. In
+   non-interactive shells add `-force-copy` instead of answering.
 
 4. Confirm the move, then delete the local copy:
 
@@ -214,7 +222,8 @@ The `gh_setup_commands` output is a script. It does three things:
 - Sets the repo variables: `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_PLAN_CLIENT_ID`,
   `TFSTATE_RG`, `TFSTATE_ACCOUNT` and `ACR_NAME`. `ACR_NAME` is already known, because names come
   from `modules/naming`.
-- Creates all seven GitHub Environments with their reviewers and branch policies.
+- Creates all seven GitHub Environments with their reviewers and branch policies. `prod-power` gets
+  its own identity, `gh-bbm-prod-power`, which can only pause and resume prod (`BBM Power Operator`).
 - Sets `AZURE_CLIENT_ID` on each environment.
 
 Review the script before running it:
@@ -225,7 +234,9 @@ less /tmp/gh-setup.sh
 bash /tmp/gh-setup.sh
 ```
 
-These are variables, not secrets. OIDC needs no client secret. The script is safe to re-run.
+These are variables, not secrets. OIDC needs no client secret. The script is safe to re-run: when
+`github_reviewer_ids` is empty it doesn't send a `reviewers` field for `infra-global`, `prod` and
+`contracts-sepolia`, so reviewers you added by hand are kept.
 
 ## 9. Check GitHub Environment protection
 
@@ -267,14 +278,20 @@ reviewers. Add them in one of two ways:
 1. Paste the `global_tfvars_hint` output into `envs/global/global.tfvars`. It contains:
    - `subscription_id` and `suffix`.
    - `ephemeral_ci_principal_id`, the `gh-bbm-ephemeral` service principal.
-   - `secret_officer_object_ids`, which starts as the `gh-bbm-global` service principal.
+   - `secret_officer_sp_object_ids`, the `gh-bbm-global` service principal. These assignments use
+     `principal_type = "ServicePrincipal"`, so CI can apply them.
 
    ```sh
    ./scripts/tf.sh bootstrap global output -raw global_tfvars_hint
    ```
 
-2. Add your admin object ID or group to `secret_officer_object_ids`, so you can set the shared
-   secrets in step 12.
+2. **Add your own user object ID to `secret_officer_user_object_ids`.** Without it you can't set the
+   shared secrets in step 12: the vault uses RBAC, and being subscription Owner doesn't grant
+   data-plane access. Get your ID with `az ad signed-in-user show --query id -o tsv`. These
+   assignments use `principal_type = "User"` (groups aren't supported), and CI (`gh-bbm-global`) may
+   only create role assignments for service principals, so **apply every change to this list locally
+   as a subscription Owner**. A CI apply that has to add or remove a user entry fails.
+   `acr_push_principal_ids` likewise takes build identities (service principals) only.
 3. Review `alert_emails`, `rg_budget_amount` and `law_daily_quota_gb`.
 4. Apply:
 
@@ -284,8 +301,8 @@ reviewers. Add them in one of two ways:
    ./scripts/tf.sh global global apply tfplan
    ```
 
-This fills `rg-bbm-shared-eus2` with `acrbbm<sfx>`, `log-bbm-shared-eus2`, `id-bbm-aca-pull` and
-`kv-bbm-shared-<sfx>`. It also grants `gh-bbm-ephemeral` AcrPush, Managed Identity Operator on
+This fills `rg-bbm-shared-eus2` with `acrbbm<sfx>`, `log-bbm-shared-eus2`, `id-bbm-aca-pull` and an
+empty `kv-bbm-shared-<sfx>`. It also grants `gh-bbm-ephemeral` AcrPush, Managed Identity Operator on
 `id-bbm-aca-pull` and Log Analytics Contributor. After this, `terraform.yml` applies `global` on
 pushes to `main` through the `infra-global` environment.
 
@@ -305,8 +322,9 @@ Re-run with `--force` to pick up a newer patch release.
 
 ## 12. Set the shared Key Vault secrets
 
-Terraform creates the secrets with the value `placeholder-set-me` and ignores later value changes.
-Set the real values out of band, so they never enter state:
+Terraform creates only the vault. It doesn't manage these secrets at all, because even a
+placeholder resource with `ignore_changes` refreshes the live value into state. Create them with `az`,
+so externally supplied values never enter Terraform state:
 
 ```sh
 KV=$(./scripts/tf.sh global global output -raw shared_key_vault_name)
@@ -316,7 +334,8 @@ az keyvault secret set --vault-name "$KV" --name etherscan-api-key    --value ".
 ```
 
 Use `--file` for the deployer key so it doesn't land in shell history, then delete the file. A 403
-means you aren't in `secret_officer_object_ids` (step 10), or the assignment hasn't propagated yet.
+(`ForbiddenByRbac`) means you aren't in `secret_officer_user_object_ids` (step 10), or the assignment
+hasn't propagated yet (wait a few minutes and retry).
 
 The env vaults (`kv-bbm-stg-<sfx>`, `kv-bbm-prd-<sfx>`) get `llm-api-key` set the same way after
 their `data` stack is applied.
@@ -332,17 +351,17 @@ their `data` stack is applied.
 - [ ] `./scripts/tf.sh bootstrap global plan` on the remote backend reports **No changes**, and no
       `stacks/bootstrap/terraform.tfstate*` remains.
 - [ ] `az ad app list --display-name gh-bbm- --query "[].displayName" -o tsv` lists `gh-bbm-plan`,
-      `gh-bbm-ephemeral`, `gh-bbm-global`, `gh-bbm-staging` and `gh-bbm-prod`.
+      `gh-bbm-ephemeral`, `gh-bbm-global`, `gh-bbm-staging`, `gh-bbm-prod` and `gh-bbm-prod-power`.
 - [ ] `gh variable list --repo LoistCloist/bug-bounty-marketplace` shows the six repo variables.
 - [ ] `gh api repos/LoistCloist/bug-bounty-marketplace/environments --jq '.environments[].name'`
       lists all seven environments.
 - [ ] Reviewer and branch rules match the table in step 9.
 - [ ] `az acr repository show -n <acr> --repository mirror/postgres` succeeds.
-- [ ] `az keyvault secret show --vault-name <shared-kv> -n sepolia-rpc-url --query value` no longer
-      returns `placeholder-set-me`.
+- [ ] `az keyvault secret list --vault-name <shared-kv> --query "[].name" -o tsv` lists
+      `sepolia-rpc-url` and `sepolia-deployer-key` (and `etherscan-api-key` if set).
 - [ ] Dispatch `terraform.yml` with a `plan` of `global`. It should log in through OIDC and report no
-      changes. Plan jobs run with `-lock=false`, because `gh-bbm-plan` only has Storage Blob Data
-      Reader on state.
+      changes. Plan jobs run with `-lock=false`, because `gh-bbm-plan` only has a path-conditioned
+      `BBM tfstate reader` on state.
 
 ## Teardown and reset
 
@@ -385,7 +404,7 @@ their `data` stack is applied.
 | `VaultAlreadyExists` / "a vault with the same name already exists in deleted state"                         | A soft-deleted vault holds the name. The provider sets `recover_soft_deleted_key_vaults = true`, so a re-apply normally recovers it. Otherwise run `az keyvault list-deleted -o table`, then `az keyvault recover -n <name>` to keep its secrets, or `az keyvault purge -n <name> -l eastus2` to start fresh.                                                                                                                                                                         |
 | `AADSTS700213: No matching federated identity record found for presented assertion subject`                 | The workflow's OIDC subject doesn't match a federated credential. Jobs that declare `environment: <env>` present `repo:LoistCloist/bug-bounty-marketplace:environment:<env>`. Plan jobs present `...:pull_request` or `...:ref:refs/heads/main`. Check the job's `environment:` key, that `AZURE_CLIENT_ID` belongs to the app for that environment, and the configured subjects (`az ad app federated-credential list --id <app-id>`). Repo renames or transfers change the subject. |
 | `AADSTS700212: No matching federated identity record found for presented assertion audience`                | The `azure/login` audience must be `api://AzureADTokenExchange` (the default).                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 403 `AuthorizationPermissionMismatch` on state blobs                                                        | The identity lacks a Storage Blob Data role on `tfstate`, or the role assignment hasn't propagated yet (allow up to about 10 minutes).                                                                                                                                                                                                                                                                                                                                                |
+| 403 `AuthorizationPermissionMismatch` on state blobs                                                        | The identity lacks its `BBM tfstate writer`/`reader` role on `tfstate`, the key is outside the prefixes its ABAC condition allows (e.g. `gh-bbm-plan` reading `prod/`, or a non-`test/`/`preview/` `TF_STATE_KEY`), or the role assignment hasn't propagated yet (allow up to about 10 minutes).                                                                                                                                                                                      |
 | Plan job fails to acquire the state lock (403 on the lease)                                                 | `gh-bbm-plan` is read-only on state by design. Run plan with `-lock=false`.                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `ScopeLocked` when deleting the state account or its RG                                                     | The `lock-bbm-tfstate` lock is doing its job. See [Teardown and reset](#teardown-and-reset).                                                                                                                                                                                                                                                                                                                                                                                          |
 | `az acr import` fails with an authentication error                                                          | Your user needs Contributor or `AcrImport` rights on the registry. Owner on the subscription is enough. Check that the ACR name is right.                                                                                                                                                                                                                                                                                                                                             |

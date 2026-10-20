@@ -1,3 +1,6 @@
 packages:
   - "apps/*"
   - "packages/*"
+  # System-level test suites (integration/regression/smoke/e2e) that run
+  # against a live stack. No `test` script, so `pnpm -r test` never needs one.
+  - "tests"
