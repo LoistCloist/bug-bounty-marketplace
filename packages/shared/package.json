@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "gen:schema": "tsx scripts/gen-schema.ts",
+    "gen:abi": "tsx scripts/gen-abi.ts",
     "test": "vitest run"
   },
   "devDependencies": {
