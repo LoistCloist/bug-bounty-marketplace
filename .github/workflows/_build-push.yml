@@ -1,0 +1,168 @@
+name: Build and push images
+
+# ---------------------------------------------------------------------
+# Reusable workflow: build the service images and push them to the
+# shared ACR as <acr>.azurecr.io/bbm/<svc>:<tag>. Callers pass the
+# GitHub Environment whose OIDC identity may push (test/preview →
+# gh-bbm-ephemeral, which holds AcrPush).
+#
+# Layer cache: the same GHA cache scopes as ci.yml's containers job
+# (api/web/analysis/contracts), so a main push reuses the layers CI
+# just built, plus a registry cache (bbm/<svc>:buildcache) that survives
+# GHA cache eviction. Images carry max provenance and an SBOM.
+#
+# The caller job must grant `id-token: write` and `contents: read`.
+# Skips cleanly (every job skipped) while vars.ACR_NAME is unset.
+# ---------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Image tag, e.g. sha-abc1234 or pr-42-sha-abc1234.
+        required: true
+        type: string
+      services:
+        description: JSON array of services to build (subset of api, web, analysis, contracts).
+        required: false
+        type: string
+        default: '["api","web","analysis","contracts"]'
+      web-mocked:
+        description: Also build web with NEXT_PUBLIC_API_MOCKING=enabled, tagged <tag>-mocked.
+        required: false
+        type: boolean
+        default: false
+      environment:
+        description: GitHub Environment holding the AZURE_CLIENT_ID allowed to push.
+        required: true
+        type: string
+    outputs:
+      registry:
+        description: Registry login server (<acr>.azurecr.io).
+        value: ${{ jobs.plan.outputs.registry }}
+      tag:
+        description: The tag that was pushed (mocked web is <tag>-mocked).
+        value: ${{ jobs.plan.outputs.tag }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Validate inputs and expand them into the build matrix: one entry per
+  # service, plus a web-mocked entry when requested. Every entry carries
+  # its build context, Dockerfile, final tag and cache scope.
+  # ---------------------------------------------------------------------
+  plan:
+    name: Plan image builds
+    if: vars.ACR_NAME != ''
+    runs-on: ubuntu-latest
+    outputs:
+      registry: ${{ steps.plan.outputs.registry }}
+      tag: ${{ steps.plan.outputs.tag }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Build matrix
+        id: plan
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          TAG: ${{ inputs.tag }}
+          SERVICES: ${{ inputs.services }}
+          WEB_MOCKED: ${{ inputs.web-mocked }}
+        run: |
+          set -euo pipefail
+          # OCI tag grammar; also keeps the value safe to interpolate below.
+          if [[ ! "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}$ ]]; then
+            echo "::error::invalid image tag '$TAG'"
+            exit 1
+          fi
+          matrix=$(jq -cn --argjson services "$SERVICES" --arg tag "$TAG" --arg mocked "$WEB_MOCKED" '
+            def spec:
+              { api:       { context: ".",                file: "apps/api/Dockerfile" },
+                web:       { context: ".",                file: "apps/web/Dockerfile" },
+                analysis:  { context: "workers/analysis", file: "workers/analysis/Dockerfile" },
+                contracts: { context: "contracts",        file: "contracts/Dockerfile" } };
+            ($services | if type == "array" and length > 0 then . else error("services must be a non-empty JSON array") end) as $s
+            | ($s - (spec | keys)) as $unknown
+            | if ($unknown | length) > 0 then error("unknown services: \($unknown | join(", "))") else . end
+            | [ $s[] | spec[.] + { service: ., tag: $tag, scope: ., mocking: "disabled" } ]
+              + (if $mocked == "true" and ($s | index("web")) != null
+                 then [ spec.web + { service: "web", tag: "\($tag)-mocked", scope: "web-mocked", mocking: "enabled" } ]
+                 else [] end)
+            | { include: . }')
+          {
+            echo "matrix=$matrix"
+            echo "registry=${ACR_NAME}.azurecr.io"
+            echo "tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
+          echo "$matrix" | jq .
+
+  # ---------------------------------------------------------------------
+  # One build per matrix entry, pushed with the environment's OIDC
+  # identity (no secrets, no admin user: ACR admin is disabled).
+  # ---------------------------------------------------------------------
+  build:
+    name: build ${{ matrix.service }}${{ matrix.mocking == 'enabled' && ' (mocked)' || '' }}
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      IMAGE: ${{ needs.plan.outputs.registry }}/bbm/${{ matrix.service }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # forge-std is a submodule under contracts/lib; the other images
+          # do not need it.
+          submodules: ${{ matrix.service == 'contracts' && 'recursive' || 'false' }}
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: true
+          tags: ${{ env.IMAGE }}:${{ matrix.tag }}
+          # Only apps/web declares this ARG; the other Dockerfiles ignore it.
+          build-args: |
+            NEXT_PUBLIC_API_MOCKING=${{ matrix.mocking }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          # Read CI's scope (web-mocked falls back to web's layers too);
+          # write back to the entry's own scope.
+          cache-from: |
+            type=gha,scope=${{ matrix.service }}
+            type=gha,scope=${{ matrix.scope }}
+            type=registry,ref=${{ env.IMAGE }}:buildcache${{ matrix.mocking == 'enabled' && '-mocked' || '' }}
+          cache-to: |
+            type=gha,mode=max,scope=${{ matrix.scope }}
+            type=registry,ref=${{ env.IMAGE }}:buildcache${{ matrix.mocking == 'enabled' && '-mocked' || '' }},mode=max,image-manifest=true,oci-mediatypes=true
+
+      - name: Summary
+        env:
+          REF: ${{ env.IMAGE }}:${{ matrix.tag }}
+        run: echo "- \`$REF\`" >> "$GITHUB_STEP_SUMMARY"
