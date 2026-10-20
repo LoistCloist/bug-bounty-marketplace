@@ -2,6 +2,7 @@ import { createPublicClient, createWalletClient, http, type Address } from "viem
 import { privateKeyToAccount } from "viem/accounts";
 import { createAuditorStakingPort, type AuditorStakingPort } from "./auditor-staking.js";
 import { claimLockEnabled, loadChainConfig, type ChainConfig } from "./config.js";
+import { createBountyEscrowPort, type BountyEscrowPort } from "./bounty-escrow.js";
 
 /** Builds the AuditorStaking port against the configured RPC node, signing
  * lock/unlock with the operator key. Only called when a chain is configured. */
@@ -28,4 +29,17 @@ export function buildAuditorStakingPort(
   const chainConfig = loadChainConfig(env);
   if (!chainConfig || !claimLockEnabled(env)) return undefined;
   return createPort(chainConfig);
+}
+
+/** Builds the BountyEscrow port against the configured RPC node, signing
+ * submission, verification and payout writes with the operator key. Only
+ * called when a chain is configured. */
+export function createBountyEscrowFromConfig(config: ChainConfig): BountyEscrowPort {
+  const transport = http(config.rpcUrl);
+  const account = privateKeyToAccount(config.operatorPrivateKey);
+  return createBountyEscrowPort({
+    address: config.bountyEscrowAddress as Address,
+    publicClient: createPublicClient({ transport }),
+    walletClient: createWalletClient({ account, transport }),
+  });
 }
