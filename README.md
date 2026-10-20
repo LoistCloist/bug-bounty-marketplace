@@ -146,16 +146,16 @@ applying it).
 All authenticate with GitHub OIDC (no secrets) and skip green until the
 bootstrap repo variables exist.
 
-| Workflow                | Trigger                         | What it does                                                                       |
-| ----------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
-| `_build-push.yml`       | reusable                        | build and push images to ACR (`bbm/<svc>:<tag>`) with SBOM + provenance            |
-| `integration-azure.yml` | push to `main`, nightly, manual | ephemeral ACA test env: smoke, integration, e2e (+ k6 on demand), always destroyed |
-| `preview.yml`           | PR open/push/close              | per-PR ACA preview (mocked web), sticky comment, destroyed on close                |
-| `terraform.yml`         | PR, push to `main`, manual      | plan on PRs, auto-apply `global` on `main`, manual plan/apply per stack            |
-| `deploy.yml`            | manual, called by env-power     | Helm deploy to staging/prod AKS, then smoke                                        |
-| `env-power.yml`         | manual, schedules               | `status` / `pause` / `resume` / `down` / `up` for staging/prod, nightly auto-pause |
-| `contracts-deploy.yml`  | manual                          | deploy the contracts to Sepolia (dry run by default)                               |
-| `infra-janitor.yml`     | every 6 h, weekly, manual       | sweep expired ephemeral envs and state, weekly ACR purge                           |
+| Workflow                | Trigger                         | What it does                                                                               |
+| ----------------------- | ------------------------------- | ------------------------------------------------------------------------------------------ |
+| `_build-push.yml`       | reusable                        | build and push images to ACR (`bbm/<svc>:<tag>`) with SBOM + provenance                    |
+| `integration-azure.yml` | push to `main`, nightly, manual | ephemeral ACA test env: smoke, integration, e2e (+ k6 nightly/on demand), always destroyed |
+| `preview.yml`           | PR open/push/close              | per-PR ACA preview (mocked web), sticky comment, destroyed on close                        |
+| `terraform.yml`         | PR, push to `main`, manual      | plan on PRs, apply `global` on `main` (infra-global approval), manual plan/apply per stack |
+| `deploy.yml`            | manual, called by env-power     | Helm deploy to staging/prod AKS, then smoke                                                |
+| `env-power.yml`         | manual, schedules               | `status` / `pause` / `resume` / `down` / `up` for staging/prod, nightly auto-pause         |
+| `contracts-deploy.yml`  | manual                          | deploy the contracts to Sepolia (dry run by default)                                       |
+| `infra-janitor.yml`     | every 6 h, weekly, manual       | sweep expired ephemeral envs and state, weekly ACR purge                                   |
 
 ## Infrastructure and environments
 

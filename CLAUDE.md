@@ -138,7 +138,7 @@ docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.3   # lint workflo
 - **Flow branches (developer / auditor / arbiter) run in parallel**, once the
   foundation is in place. Each flow gets its own git worktree and its own
   sub-agent, split by mock handler area:
-  - `apps/web/mocks/handlers/{developer,auditor,arbiter}.ts` plus a shared
+  - `apps/web/src/mocks/handlers/{developer,auditor,arbiter}.ts` plus a shared
     `index.ts` that composes them.
   - The mock DB is split the same way (per-flow data/fixtures module).
   - Each flow agent may only touch files and routes under its own area. If a

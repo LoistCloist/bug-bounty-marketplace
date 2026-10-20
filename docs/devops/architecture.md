@@ -148,7 +148,7 @@ There are no client secrets in GitHub or in the cluster.
 ```mermaid
 flowchart LR
     subgraph GH["GitHub Actions"]
-        JOB["job with environment: test, preview,<br/>staging, prod, prod-power, infra-global"]
+        JOB["job with environment: test, preview,<br/>staging, prod, prod-power, infra-global,<br/>contracts-sepolia"]
         PR["PR / main plan jobs"]
     end
     JOB -- "OIDC token<br/>sub=repo:...:environment:ENV" --> ENTRA["Entra ID"]
@@ -156,7 +156,7 @@ flowchart LR
     ENTRA --> EPH["gh-bbm-ephemeral<br/>Contributor on test/preview RGs, AcrPush"]
     ENTRA --> STG["gh-bbm-staging / gh-bbm-prod<br/>Contributor on own data+compute RGs,<br/>AKS RBAC Cluster Admin, constrained RBAC admin"]
     ENTRA --> PWR["gh-bbm-prod-power<br/>BBM Power Operator only"]
-    ENTRA --> GLB["gh-bbm-global<br/>shared RG, budgets"]
+    ENTRA --> GLB["gh-bbm-global<br/>Contributor on shared RG, budgets,<br/>KV Secrets Officer (shared vault)"]
     ENTRA --> PLAN["gh-bbm-plan<br/>Reader + BBM tfstate reader"]
     EPH & STG & GLB -- "BBM tfstate writer,<br/>ABAC per state prefix" --> TFS[("tfstate")]
 
@@ -228,8 +228,11 @@ flowchart TB
 - Today staging is deployed by dispatching `deploy.yml` (or by `env-power.yml up`, which redeploys
   the last tag). An automatic staging deploy after a green `integration-azure.yml` run is not wired
   yet.
-- `deploy.yml` and every mutating `env-power.yml` job share the concurrency group `env-<env>`, so a
-  deploy never races a pause or resume. `deploy.yml` skips cleanly when the cluster is not running.
+- `deploy.yml` and every manual mutating `env-power.yml` job share the concurrency group
+  `env-<env>`, so a deploy never races a manual pause or resume. The scheduled auto-pause and PG
+  re-pause use `env-power-scheduled-<env>` instead, so a parked prod approval can't block the nightly
+  pause; `env-power.sh` only refuses to stop a cluster whose provisioningState isn't `Succeeded`, so a
+  deploy running at 06:00 UTC could still be interrupted. `deploy.yml` skips cleanly when the cluster is not running.
 - Ephemeral workflows never cancel mid-apply or mid-destroy, because that would strand resources and
   a leased state blob.
 
