@@ -125,7 +125,8 @@ export class PgContractRepository implements ContractRepository {
     // locked row, so only one of two concurrent claims can match.
     const result = await this.pool.query<ContractRow>(
       `UPDATE contracts c
-          SET status = 'Claimed', claimed_by_auditor_id = $2, claim_expires_at = $3
+          SET status = 'Claimed', claimed_by_auditor_id = $2, claim_expires_at = $3,
+              claim_lock_status = NULL
         WHERE c.id = $1
           AND (c.status = 'Open' OR (c.status = 'Claimed' AND c.claim_expires_at <= $4))
         RETURNING ${contractColumns("$4")}`,
@@ -140,7 +141,8 @@ export class PgContractRepository implements ContractRepository {
   async releaseClaim(contractId: string, auditorId: string): Promise<void> {
     await this.pool.query(
       `UPDATE contracts
-          SET status = 'Open', claimed_by_auditor_id = NULL, claim_expires_at = NULL
+          SET status = 'Open', claimed_by_auditor_id = NULL, claim_expires_at = NULL,
+              claim_lock_status = NULL
         WHERE id = $1 AND status = 'Claimed' AND claimed_by_auditor_id = $2`,
       [contractId, auditorId],
     );

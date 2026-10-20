@@ -22,6 +22,7 @@ export class MemoryContractRepository implements ContractRepository {
       contract: { ...contract },
       claimedByAuditorId: null,
       claimExpiresAt: null,
+      claimLock: null,
     });
     this.store.bounties.set(bounty.id, { ...bounty });
     this.store.jobs.set(analysisJob.id, {
@@ -61,6 +62,7 @@ export class MemoryContractRepository implements ContractRepository {
     stored.contract.status = "Claimed";
     stored.claimedByAuditorId = auditorId;
     stored.claimExpiresAt = new Date(expiresAt);
+    stored.claimLock = null;
     return { ok: true, contract: { ...stored.contract } };
   }
 
@@ -70,6 +72,7 @@ export class MemoryContractRepository implements ContractRepository {
     stored.contract.status = "Open";
     stored.claimedByAuditorId = null;
     stored.claimExpiresAt = null;
+    stored.claimLock = null;
   }
 
   async listQueue(now: Date): Promise<QueueItem[]> {
