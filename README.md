@@ -15,116 +15,171 @@ stake is slashed. Auditors can also mark AI findings as false positives.
 
 Finding statuses: `Flagged → Submitted → Verified → Disputed/Rejected → Paid`.
 
-## Repo layout
+## Repository layout
 
 ```
 .
 ├── apps/
-│   ├── web/        # Next.js frontend (feat/web-shell-mocks)
-│   └── api/         # Fastify API — GET /health scaffolded here
+│   ├── web/              # Next.js frontend (MSW mocks for the developer/auditor/arbiter flows)
+│   └── api/              # Fastify API: /health, contract upload, Postgres + migrations
 ├── packages/
-│   └── shared/      # Shared Zod schemas (feat/shared-schemas)
-├── workers/         # Non-TS services (Python/Rust) — not a pnpm workspace member
-├── contracts/       # Foundry project: escrow, bounty, dispute contracts
-├── docs/            # Architecture notes, ADRs
-├── docker-compose.yml
-├── pnpm-workspace.yaml
-├── tsconfig.base.json
-└── CLAUDE.md
+│   └── shared/           # @bbm/shared: Zod schemas + generated JSON Schema (schema/*.json)
+├── tests/                # @bbm/system-tests: integration, regression, smoke, e2e, load
+├── workers/
+│   └── analysis/         # Python (uv, FastAPI) Slither + LLM worker; not a pnpm package
+├── contracts/            # Foundry: AuditorStaking, BountyEscrow, DisputeResolution, Deploy.s.sol
+├── infra/terraform/      # Azure: modules, stacks (bootstrap/global/data/compute/aca-ephemeral), envs
+├── deploy/helm/bbm/      # Helm chart for the staging/prod AKS clusters
+├── docs/                 # Package docs, ADRs, DevOps runbooks
+├── uml/                  # Mermaid sources + rendered class/sequence/deployment diagrams
+├── .github/workflows/    # ci.yml plus the Azure workflows
+├── docker-compose.yml    # full local stack (+ docker-compose.ci.yml overrides for CI)
+└── CLAUDE.md             # contributor + agent conventions
 ```
 
 ## Setup
 
 ```sh
-git clone <repo>
+git clone --recurse-submodules <repo>    # forge-std is a submodule under contracts/lib
 cd bug-bounty-marketplace
 
-nvm use                     # Node 20 (see .nvmrc)
+nvm use                      # Node 20 (see .nvmrc)
 corepack enable              # or: npm install -g pnpm@9
 pnpm install
 
-pnpm -r typecheck
-pnpm -r test
+pnpm lint && pnpm typecheck && pnpm test && pnpm build
 ```
 
-### Running the web app (once scaffolded)
+Other toolchains, only for the parts you touch: Docker (Compose ≥ 2.24) for
+the stack, [Foundry v1.3.5](docs/contracts/foundry-setup.md) for
+`contracts/`, [uv](https://docs.astral.sh/uv/) for `workers/analysis`, and
+Terraform 1.9.8 / TFLint / Helm 3 for `infra/` and `deploy/`.
+
+### Web app against mocks
 
 ```sh
-NEXT_PUBLIC_API_MOCKING=enabled pnpm dev
+NEXT_PUBLIC_API_MOCKING=enabled pnpm dev      # http://localhost:3000
 ```
 
-With mocking enabled the frontend runs entirely against MSW mock handlers
+With mocking enabled the frontend runs entirely against MSW handlers
 (`apps/web/src/mocks/handlers/{developer,auditor,arbiter}.ts`), so the full
-developer → auditor → arbiter flow can be exercised without a live API,
-database, or blockchain.
+developer → auditor → arbiter flow works without an API, database or chain.
 
-### Running the API
-
-```sh
-pnpm --filter @bbm/api dev
-```
-
-Environment variables (all optional):
-
-| Variable | Effect when unset |
-| --- | --- |
-| `PORT` | Listens on 3001. |
-| `DATABASE_URL` | Contracts are held in memory. When set, the API connects to Postgres 16 and applies `apps/api/src/db/migrations` on boot. |
-| `SOURCE_STORAGE_DIR` | Uploaded `.sol` bytes are held in memory. When set, they are written under this directory. |
-
-Contract submission is `POST /api/contracts` as `multipart/form-data`, with
-fields `file` (a `.sol` file, at most 100 KB), `developerAddress`,
-`bountyAmount`, `currency` (default `ETH`) and `deadline`. It returns `201`
-with the `Contract`, including `sourceHash` (sha256 of the bytes) and
-`sourceReference` (`contracts/<id>/<sha256>.sol`). Errors: `400` for invalid
-fields (with an `issues` list), `413` for an oversize file.
-
-### Running contract tests
-
-Requires [Foundry](https://book.getfoundry.sh/):
+### API on its own
 
 ```sh
-cd contracts
-forge install foundry-rs/forge-std --no-commit   # one-time
-forge build
-forge test
+docker compose up -d db
+DATABASE_URL=postgres://bbm:bbm@localhost:5432/bbm pnpm --filter @bbm/api dev
 ```
 
-## CI
+Without `DATABASE_URL` the API keeps contracts in memory. Endpoints and
+environment variables are in [docs/api.md](docs/api.md).
 
-`.github/workflows/ci.yml` runs on every push and pull request. A `changes`
-job uses `dorny/paths-filter` to decide which jobs run. Each path-filtered
-job below runs only when its paths change; `changes` and `CI OK` always run.
-Changes to root config (`package.json`, `pnpm-lock.yaml`,
-`pnpm-workspace.yaml`, `tsconfig.base.json`, ESLint/Prettier config, the
-workflow itself) also trigger web, api and shared, but not contracts.
+## Running the stack
 
-| Job         | Runs when                                 | What it does                                                                                                                                                         |
-| ----------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `web`       | `apps/web/**`, `packages/shared/**`, root | `lint`, `typecheck`, `test`, `build` with `--if-present`                                                                                                             |
-| `api`       | `apps/api/**`, `packages/shared/**`, root | `lint`, `typecheck`, `test`, `build`, run directly                                                                                                                   |
-| `shared`    | `packages/shared/**`, root                | `lint`, `typecheck`, `test` and `gen:schema` with `--if-present`, then `git diff --exit-code -- packages/shared/schema` to fail if tracked generated schemas changed |
-| `contracts` | `contracts/**`                            | Installs Foundry and forge-std, runs `forge build` and `forge test -vvv`, then Slither (`crytic/slither-action`) with `fail-on: none`, so Slither is advisory only   |
-| `CI OK`     | always                                    | Passes if `changes` succeeded and every other job succeeded or was skipped; fails otherwise                                                                          |
-
-`--if-present` means a package script that doesn't exist is skipped and the
-step passes silently. The api job calls its scripts directly, so a missing
-script fails the job.
-
-`CI OK` is the required status check on `main` once the checked-in ruleset
-is applied (see `TODO.md`). The ruleset is checked in at
-`.github/rulesets/main.json` as the source of truth; after changing it, a
-repo admin applies it with:
+The whole system runs in Docker Compose, built from the repo's Dockerfiles:
 
 ```sh
-gh api -X PUT repos/LoistCloist/bug-bounty-marketplace/rulesets/24287837 --input .github/rulesets/main.json
+pnpm stack:up                  # build + start db, api, web, analysis, anvil; waits for healthchecks
+pnpm stack:deploy-contracts    # one-shot: deploy and wire the contracts on anvil
+pnpm stack:down                # stop and remove containers and volumes
+pnpm stack:ci                  # what CI runs: prebuilt images, tmpfs Postgres, no build
 ```
 
-CI does not deploy anything.
+| Service    | Port   | Health           |
+| ---------- | ------ | ---------------- |
+| `web`      | `3000` | `GET /healthz`   |
+| `api`      | `3001` | `GET /health`    |
+| `analysis` | `8000` | `GET /health`    |
+| `anvil`    | `8545` | chain id `31337` |
+| `db`       | `5432` | `bbm` / `bbm`    |
 
-## Milestone scope
+The web image calls the API through its `/api/*` proxy
+(`API_INTERNAL_URL=http://api:3001`). Build it with
+`NEXT_PUBLIC_API_MOCKING=enabled pnpm stack:up` to serve the MSW mocks
+instead. Images are tagged `${BBM_REGISTRY:-bbm}/<svc>:${BBM_TAG:-local}`.
 
-This repo is being built incrementally on `feat/m2-foundation` via small,
-reviewed sub-branches (monorepo scaffold → shared schemas → web shell with
-mocks → developer/auditor/arbiter flows → CI). See `CLAUDE.md` for the full
-workflow and conventions.
+## Testing
+
+| Tier               | Where                                                       | Command                                           |
+| ------------------ | ----------------------------------------------------------- | ------------------------------------------------- |
+| Unit               | next to the code (vitest, `forge test`, pytest)             | `pnpm test`, `forge test`, `uv run pytest`        |
+| DB integration     | `apps/api/src/**/pg-repository.test.ts`                     | `pnpm --filter @bbm/api test` with `DATABASE_URL` |
+| System integration | `tests/integration/`                                        | `pnpm test:integration`                           |
+| Regression         | API goldens, `contracts/.gas-snapshot`, shared schema drift | `pnpm test:regression`, `forge snapshot --check`  |
+| Smoke              | `tests/smoke/`                                              | `pnpm test:smoke`                                 |
+| E2E                | `tests/e2e/` (Playwright)                                   | `pnpm test:e2e`                                   |
+| Load               | `tests/load/` (k6)                                          | see `tests/load/README.md`                        |
+
+Unit tests never touch the network. The system tiers run against a live
+stack (`pnpm stack:up` first) and are never part of `pnpm test`. Details,
+environment variables and how to update goldens: [tests/README.md](tests/README.md).
+
+## CI/CD
+
+### `ci.yml` (every push and PR)
+
+A `changes` job (`dorny/paths-filter`) decides which jobs run. Root config
+(`package.json`, lockfile, workspace, base tsconfig, ESLint/Prettier config,
+`ci.yml`) fans out to every TS job.
+
+| Job                | What it does                                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `web`              | lint, typecheck, test, build                                                                                                 |
+| `shared`           | lint, typecheck, test, `gen:schema`, fail if `packages/shared/schema` drifted                                                |
+| `api`              | lint, typecheck, test (with a Postgres service), build, boot the built API and wait for `/health`                            |
+| `contracts`        | `forge build`, `forge test`, `forge snapshot --check`, deploy-script dry run, Slither (advisory, `fail-on: none`)            |
+| `analysis`         | `uv sync --frozen`, ruff check + format, pytest, generated-models drift check                                                |
+| `containers`       | hadolint, build every image (GHA cache), non-root check, compose stack up, deploy to anvil, integration/regression/smoke/e2e |
+| `terraform-static` | `infra/terraform/scripts/ci-static.sh`: fmt, validate, `terraform test`, tflint, shellcheck                                  |
+| `helm`             | `helm lint` every values layer, render + kubeconform, missing-tag render must fail, `ct lint`                                |
+| `workflows`        | actionlint                                                                                                                   |
+| `CI OK`            | always runs; passes when `changes` succeeded and every other job succeeded or was skipped                                    |
+
+`ci.yml` never logs in to Azure, so `CI OK` never depends on cloud
+credentials, quota or uptime. `CI OK` is the required status check on `main`
+(ruleset source of truth: `.github/rulesets/main.json`; see `TODO.md` for
+applying it).
+
+### Azure workflows
+
+All authenticate with GitHub OIDC (no secrets) and skip green until the
+bootstrap repo variables exist.
+
+| Workflow                | Trigger                         | What it does                                                                       |
+| ----------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
+| `_build-push.yml`       | reusable                        | build and push images to ACR (`bbm/<svc>:<tag>`) with SBOM + provenance            |
+| `integration-azure.yml` | push to `main`, nightly, manual | ephemeral ACA test env: smoke, integration, e2e (+ k6 on demand), always destroyed |
+| `preview.yml`           | PR open/push/close              | per-PR ACA preview (mocked web), sticky comment, destroyed on close                |
+| `terraform.yml`         | PR, push to `main`, manual      | plan on PRs, auto-apply `global` on `main`, manual plan/apply per stack            |
+| `deploy.yml`            | manual, called by env-power     | Helm deploy to staging/prod AKS, then smoke                                        |
+| `env-power.yml`         | manual, schedules               | `status` / `pause` / `resume` / `down` / `up` for staging/prod, nightly auto-pause |
+| `contracts-deploy.yml`  | manual                          | deploy the contracts to Sepolia (dry run by default)                               |
+| `infra-janitor.yml`     | every 6 h, weekly, manual       | sweep expired ephemeral envs and state, weekly ACR purge                           |
+
+## Infrastructure and environments
+
+| Environment | Platform                         | Lifetime                        |
+| ----------- | -------------------------------- | ------------------------------- |
+| `test`      | Azure Container Apps (ephemeral) | one `integration-azure.yml` run |
+| `preview`   | Azure Container Apps (ephemeral) | PR open → close                 |
+| `staging`   | own AKS cluster                  | long-lived, powered on demand   |
+| `prod`      | own AKS cluster                  | long-lived, powered on demand   |
+
+Staging and prod are split into a persistent `data` stack (Postgres, Key
+Vault, storage, IP) and a disposable `compute` stack (AKS). They are turned
+off and on with the **Env power** workflow without losing data, and pause
+automatically every night.
+
+- [ADR 0001](docs/adr/0001-azure-environment-topology.md): topology and pinned interfaces
+- [Architecture](docs/devops/architecture.md) and [cost](docs/devops/cost.md)
+- [Environment lifecycle](docs/devops/env-lifecycle.md): power runbook, demo-day checklist
+- [Azure bootstrap](docs/devops/azure-bootstrap.md): one-time subscription and OIDC setup
+- [infra/terraform/README.md](infra/terraform/README.md) and [deploy/helm/README.md](deploy/helm/README.md)
+
+## Contributing
+
+Work happens on milestone integration branches (currently `feat/m3-devops`)
+via small, reviewed sub-branches. See [CLAUDE.md](CLAUDE.md) for commands,
+conventions and the git workflow, and [docs/](docs/README.md) for everything
+else.

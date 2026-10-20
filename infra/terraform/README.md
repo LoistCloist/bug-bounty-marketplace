@@ -29,9 +29,6 @@ infra/terraform/
     janitor.sh           deletes expired ephemeral ACA resources and stale test state
 ```
 
-Later branches add the `data` and `compute` stacks, their modules, the
-`envs/{staging,prod}` directories, and `scripts/env-power.sh`. `tf.sh` already supports those stacks.
-
 ## Running Terraform: `scripts/tf.sh`
 
 ```sh
@@ -178,14 +175,14 @@ characters.
 
 Inputs come from `envs/<kind>/aca.tfvars` plus `TF_VAR_*` set by the workflow:
 
-| variable | test (`integration-azure.yml`) | preview (`preview.yml`) |
-|---|---|---|
-| `TF_VAR_subscription_id` | `vars.AZURE_SUBSCRIPTION_ID` | same |
-| `TF_VAR_env_name` | `run-${{ github.run_id }}-${{ github.run_attempt }}` | `pr-<n>` |
-| `TF_VAR_image_tag` | `sha-<7>` | `pr-<n>-sha-<7>` |
-| `TF_VAR_web_image_tag` | (unset, so `image_tag`) | `pr-<n>-sha-<7>-mocked` |
-| `TFSTATE_RG` / `TFSTATE_ACCOUNT` | `vars.TFSTATE_RG` / `vars.TFSTATE_ACCOUNT` | same |
-| `TF_STATE_KEY` | `test/run-<run_id>-<attempt>.tfstate` | `preview/pr-<n>.tfstate` |
+| variable                         | test (`integration-azure.yml`)                       | preview (`preview.yml`)  |
+| -------------------------------- | ---------------------------------------------------- | ------------------------ |
+| `TF_VAR_subscription_id`         | `vars.AZURE_SUBSCRIPTION_ID`                         | same                     |
+| `TF_VAR_env_name`                | `run-${{ github.run_id }}-${{ github.run_attempt }}` | `pr-<n>`                 |
+| `TF_VAR_image_tag`               | `sha-<7>`                                            | `pr-<n>-sha-<7>`         |
+| `TF_VAR_web_image_tag`           | (unset, so `image_tag`)                              | `pr-<n>-sha-<7>-mocked`  |
+| `TFSTATE_RG` / `TFSTATE_ACCOUNT` | `vars.TFSTATE_RG` / `vars.TFSTATE_ACCOUNT`           | same                     |
+| `TF_STATE_KEY`                   | `test/run-<run_id>-<attempt>.tfstate`                | `preview/pr-<n>.tfstate` |
 
 `tfstate_resource_group` and `tfstate_account` tell the stack where to read
 `global.tfstate` (ACR login server, LAW ID, pull identity, suffix). The
