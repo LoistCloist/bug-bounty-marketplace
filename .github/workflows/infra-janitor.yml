@@ -1,0 +1,286 @@
+name: Infra janitor
+
+# ---------------------------------------------------------------------
+# Sweeps leftovers of ephemeral ACA environments with
+# infra/terraform/scripts/janitor.sh: expired (expires_on tag) container
+# apps/environments in rg-bbm-{test,preview}-eus2 and stale test/ state
+# blobs. Weekly it also purges old pr-*/sha-* images from bbm/* in ACR.
+#
+#   every 6h          sweep, --apply
+#   Sun 03:30 UTC     sweep + ACR purge, --apply
+#   manual dispatch   dry run unless `apply`; purge only with `acr_purge`
+#
+# Identities: the sweep runs in GitHub Environment `test`
+# (gh-bbm-ephemeral). The ACR purge needs control-plane rights on the
+# registry (acr run, delete locks), so it runs as its own job in
+# `infra-global` (gh-bbm-global, Contributor on the shared RG). That
+# environment has a required reviewer: the weekly purge WAITS FOR
+# APPROVAL (and times out unapproved after 30 days, which is harmless:
+# next week's run tries again). The sweep never waits: it has its own
+# job-level concurrency group, separate from the purge's.
+#
+# ACR purge guard: the purge (>30d, keep 10 newest) has no keep list,
+# so a tag still running on staging/prod (data RG tag
+# bbm-last-deployed-tag) could age out. The `protected-tags` job reads
+# those tags with the read-only plan identity, and `acr-purge` puts a
+# delete lock on them for the duration of the purge (`acr purge` skips
+# locked images unless --include-locked). If the tags cannot be read,
+# the purge is skipped, never run unguarded.
+# ---------------------------------------------------------------------
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+    - cron: '30 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Actually delete (unchecked = dry run).
+        type: boolean
+        default: false
+      acr_purge:
+        description: Also purge old pr-*/sha-* images from ACR.
+        type: boolean
+        default: false
+
+# No workflow-level concurrency: that would queue the 6h sweep behind a
+# weekly run whose acr-purge is waiting for infra-global approval. The
+# sweep and the purge each serialize in their own job-level group.
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Skip everything until the bootstrap repo vars exist, and resolve the
+  # mode from the trigger.
+  # ---------------------------------------------------------------------
+  gate:
+    name: Gate
+    if: vars.AZURE_SUBSCRIPTION_ID != ''
+    runs-on: ubuntu-latest
+    outputs:
+      apply: ${{ steps.mode.outputs.apply }}
+      acr_purge: ${{ steps.mode.outputs.acr_purge }}
+    steps:
+      - name: Resolve mode
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+          INPUT_APPLY: ${{ inputs.apply }}
+          INPUT_ACR_PURGE: ${{ inputs.acr_purge }}
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == "schedule" ]]; then
+            apply=true
+            acr_purge=false
+            [[ "$CRON" == "30 3 * * 0" ]] && acr_purge=true
+          else
+            apply=${INPUT_APPLY:-false}
+            acr_purge=${INPUT_ACR_PURGE:-false}
+          fi
+          if [[ "$acr_purge" == "true" && -z "$ACR_NAME" ]]; then
+            echo "::warning::ACR_NAME is not set; skipping ACR purge"
+            acr_purge=false
+          fi
+          echo "apply=$apply acr_purge=$acr_purge"
+          {
+            echo "apply=$apply"
+            echo "acr_purge=$acr_purge"
+          } >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------
+  # Tags currently deployed to staging/prod, read from the data RG tag
+  # bbm-last-deployed-tag. Uses the plan identity (Reader; no
+  # environment, so its main-branch federated subject applies): the
+  # ephemeral identity cannot read staging/prod RGs. A missing RG means
+  # that env was never deployed; any other error fails the job, which
+  # disables the purge.
+  # ---------------------------------------------------------------------
+  protected-tags:
+    name: Read deployed tags
+    needs: gate
+    if: needs.gate.outputs.acr_purge == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      tags: ${{ steps.read.outputs.tags }}
+    steps:
+      - name: Azure login (OIDC, plan identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Read bbm-last-deployed-tag
+        id: read
+        run: |
+          set -euo pipefail
+          tags=()
+          for env in staging prod; do
+            rg="rg-bbm-${env}-data-eus2"
+            if [[ "$(az group exists --name "$rg" --only-show-errors)" != "true" ]]; then
+              echo "$rg: not found"
+              continue
+            fi
+            tag=$(az group show --name "$rg" --query 'tags."bbm-last-deployed-tag"' -o tsv --only-show-errors)
+            if [[ -z "$tag" || "$tag" == "None" ]]; then
+              echo "$rg: no bbm-last-deployed-tag"
+              continue
+            fi
+            if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+              echo "::error::$rg has an invalid bbm-last-deployed-tag '$tag'"
+              exit 1
+            fi
+            echo "$rg: $tag"
+            tags+=("$tag")
+          done
+          echo "tags=${tags[*]}" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------
+  # Resource + state sweep as the ephemeral identity (environment `test`).
+  # ---------------------------------------------------------------------
+  sweep:
+    name: Sweep ephemeral envs
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: test
+    concurrency:
+      group: infra-janitor-sweep
+      cancel-in-progress: false
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
+      APPLY: ${{ needs.gate.outputs.apply }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run janitor
+        run: |
+          if [[ "$APPLY" == "true" ]]; then
+            infra/terraform/scripts/janitor.sh --apply
+          else
+            infra/terraform/scripts/janitor.sh --dry-run
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Infra janitor: sweep"
+            echo "- mode: $([[ "$APPLY" == "true" ]] && echo apply || echo dry run)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # Guarded ACR purge as gh-bbm-global (environment `infra-global`,
+  # required reviewer). Runs only when requested AND the deployed tags
+  # were read successfully. This is the only place images are purged:
+  # scripts/janitor.sh deliberately has no ACR step.
+  # ---------------------------------------------------------------------
+  acr-purge:
+    name: ACR purge
+    needs: [gate, protected-tags]
+    if: ${{ always() && needs.gate.outputs.acr_purge == 'true' && needs.protected-tags.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: infra-global
+    concurrency:
+      group: infra-janitor-acr-purge
+      cancel-in-progress: false
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      APPLY: ${{ needs.gate.outputs.apply }}
+      PROTECTED_TAGS: ${{ needs.protected-tags.outputs.tags }}
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Lock deployed tags and purge
+        run: |
+          set -euo pipefail
+          # Delete-lock every bbm/* image carrying a protected tag, and
+          # restore exactly the locks we changed on exit (even on failure).
+          locked=()
+          unlock() {
+            local ref
+            for ref in "${locked[@]+"${locked[@]}"}"; do
+              az acr repository update --name "$ACR_NAME" --image "$ref" \
+                --delete-enabled true --only-show-errors >/dev/null ||
+                echo "::warning::could not remove delete lock from $ref"
+            done
+          }
+          trap unlock EXIT
+
+          read -r -a protected <<< "${PROTECTED_TAGS:-}"
+          echo "protected tags: ${protected[*]:-none}"
+          if [[ "$APPLY" == "true" ]]; then
+            for tag in "${protected[@]+"${protected[@]}"}"; do
+              for svc in api web analysis contracts; do
+                ref="bbm/$svc:$tag"
+                enabled=$(az acr repository show --name "$ACR_NAME" --image "$ref" \
+                  --query changeableAttributes.deleteEnabled -o tsv --only-show-errors 2>/dev/null) || {
+                  echo "$ref: not in registry"
+                  continue
+                }
+                if [[ "$enabled" == "true" ]]; then
+                  az acr repository update --name "$ACR_NAME" --image "$ref" \
+                    --delete-enabled false --only-show-errors >/dev/null
+                  locked+=("$ref")
+                  echo "$ref: delete-locked for the purge"
+                else
+                  echo "$ref: already delete-locked"
+                fi
+              done
+            done
+          else
+            echo "dry run: protected tags are not locked, so the --dry-run report may list them; a real run keeps them"
+          fi
+
+          purge_cmd="acr purge --filter 'bbm/.*:pr-.*' --filter 'bbm/.*:sha-.*' --ago 30d --keep 10 --untagged"
+          [[ "$APPLY" == "true" ]] || purge_cmd+=" --dry-run"
+          echo "acr run on $ACR_NAME: $purge_cmd"
+          az acr run --registry "$ACR_NAME" --cmd "$purge_cmd" /dev/null --only-show-errors
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Infra janitor: ACR purge"
+            echo "- mode: $([[ "$APPLY" == "true" ]] && echo apply || echo dry run)"
+            echo "- protected (staging/prod deployed) tags: ${PROTECTED_TAGS:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Make a skipped purge visible (tags unreadable → never purge unguarded).
+  purge-skipped:
+    name: ACR purge skipped
+    needs: [gate, protected-tags]
+    if: ${{ always() && needs.gate.outputs.acr_purge == 'true' && needs.protected-tags.result != 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Warn
+        run: |
+          echo "::warning::Could not read deployed tags from staging/prod; ACR purge skipped."
+          exit 1
