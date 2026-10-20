@@ -70,6 +70,11 @@ export interface PipelineRepository {
   listUnappliedVerdicts(limit: number): Promise<UnappliedVerdict[]>;
   /** Marks a PoC's verdict as applied through chain actions. */
   markVerdictApplied(pocId: string, at: Date): Promise<void>;
+  /** Flagged → Rejected with isFalsePositive, atomically. "not_flagged" when
+   * the finding has moved on, "not_found" when it does not exist. */
+  markFalsePositive(findingId: string, changedAt: string): Promise<"ok" | "not_flagged" | "not_found">;
+  /** The finding's most recent PoC submission, or null. */
+  findLatestPoc(findingId: string): Promise<PoCSubmission | null>;
 }
 
 export interface UnappliedVerdict {

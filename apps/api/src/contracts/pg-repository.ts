@@ -262,6 +262,16 @@ export class PgContractRepository implements ContractRepository {
     };
   }
 
+  async listClaimedContractIds(auditorId: string, now: Date): Promise<string[]> {
+    const result = await this.pool.query<{ id: string }>(
+      `SELECT id FROM contracts
+        WHERE status = 'Claimed' AND claimed_by_auditor_id = $1 AND claim_expires_at > $2
+        ORDER BY id`,
+      [auditorId, now],
+    );
+    return result.rows.map((row) => row.id);
+  }
+
   async markFunded(contractId: string, at: Date): Promise<void> {
     await this.pool.query(
       "UPDATE bounties SET onchain_funded_at = COALESCE(onchain_funded_at, $2) WHERE contract_id = $1",

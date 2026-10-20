@@ -164,4 +164,21 @@ export class MemoryPipelineRepository implements PipelineRepository {
     if (!this.store.verdictsApplied.has(pocId))
       this.store.verdictsApplied.set(pocId, at.toISOString());
   }
+
+  async markFalsePositive(findingId: string, changedAt: string): Promise<"ok" | "not_flagged" | "not_found"> {
+    const record = this.store.findings.get(findingId);
+    if (!record) return "not_found";
+    if (record.status !== "Flagged") return "not_flagged";
+    record.status = "Rejected";
+    record.isFalsePositive = true;
+    record.statusHistory = [...record.statusHistory, { status: "Rejected", changedAt }];
+    return "ok";
+  }
+
+  async findLatestPoc(findingId: string): Promise<PoCSubmission | null> {
+    const latest = [...this.store.pocs.values()]
+      .filter((poc) => poc.findingId === findingId)
+      .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0];
+    return latest ? { ...latest } : null;
+  }
 }

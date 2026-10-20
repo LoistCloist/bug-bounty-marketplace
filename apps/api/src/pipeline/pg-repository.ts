@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import type { AnalysisStatus, Contract, Finding, SandboxStatus } from "@bbm/shared";
+import type { AnalysisStatus, Contract, Finding, PoCSubmission, SandboxStatus } from "@bbm/shared";
 import { PgContractRepository } from "../contracts/pg-repository.js";
 import { toAnalysisJobStatus, toFinding } from "./mapping.js";
 import type {
@@ -215,5 +215,45 @@ export class PgPipelineRepository implements PipelineRepository {
       [pocId, at],
     );
     if (result.rowCount !== 1) throw new Error(`Unknown PoC ${pocId}`);
+  }
+
+  async markFalsePositive(findingId: string, changedAt: string): Promise<"ok" | "not_flagged" | "not_found"> {
+    const result = await this.pool.query(
+      `UPDATE findings
+          SET status = 'Rejected', is_false_positive = true,
+              status_history = status_history || $2::jsonb
+        WHERE id = $1 AND status = 'Flagged'`,
+      [findingId, JSON.stringify([{ status: "Rejected", changedAt }])],
+    );
+    if (result.rowCount === 1) return "ok";
+    const exists = await this.pool.query("SELECT 1 FROM findings WHERE id = $1", [findingId]);
+    return exists.rowCount === 1 ? "not_flagged" : "not_found";
+  }
+
+  async findLatestPoc(findingId: string): Promise<PoCSubmission | null> {
+    const result = await this.pool.query<{
+      id: string;
+      finding_id: string;
+      auditor_id: string;
+      test_file_reference: string;
+      submitted_at: Date;
+      sandbox_status: PoCSubmission["sandboxStatus"];
+      sandbox_log: string | null;
+    }>(
+      `SELECT id, finding_id, auditor_id, test_file_reference, submitted_at, sandbox_status, sandbox_log
+         FROM poc_submissions WHERE finding_id = $1 ORDER BY submitted_at DESC, id DESC LIMIT 1`,
+      [findingId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      findingId: row.finding_id,
+      auditorId: row.auditor_id,
+      testFileReference: row.test_file_reference,
+      submittedAt: row.submitted_at.toISOString(),
+      sandboxStatus: row.sandbox_status,
+      sandboxLog: row.sandbox_log,
+    };
   }
 }

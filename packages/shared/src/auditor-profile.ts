@@ -10,5 +10,7 @@ export const AuditorProfileSchema = z.object({
   /** Simple numeric reputation score; higher is better. */
   reputation: z.number(),
   claimedContractIds: z.array(IdSchema).default([]),
+  /** Wei credited to the auditor by BountyEscrow and not yet withdrawn. */
+  pendingPayout: WeiSchema.optional(),
 });
 export type AuditorProfile = z.infer<typeof AuditorProfileSchema>;

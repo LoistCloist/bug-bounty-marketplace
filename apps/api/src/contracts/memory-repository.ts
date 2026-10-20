@@ -131,6 +131,12 @@ export class MemoryContractRepository implements ContractRepository {
     return stored ? (this.store.bounties.get(stored.contract.bountyId) ?? null) : null;
   }
 
+  async listClaimedContractIds(auditorId: string, now: Date): Promise<string[]> {
+    return [...this.store.contracts.values()]
+      .filter((stored) => this.store.activeClaim(stored.contract.id, now)?.auditorId === auditorId)
+      .map((stored) => stored.contract.id);
+  }
+
   async markFunded(contractId: string, at: Date): Promise<void> {
     if (!this.store.onchainFunded.has(contractId)) this.store.onchainFunded.set(contractId, at.toISOString());
   }

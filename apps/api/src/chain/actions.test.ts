@@ -42,6 +42,7 @@ function fakePorts() {
   let active = 0n;
   const auditorStaking = {
     stakeOf: vi.fn(async () => 0n),
+    reputation: vi.fn(async () => 0n),
     activeSubmissions: vi.fn(async () => active),
     lockSubmission: vi.fn(async (_auditor: Address) => {
       active += 1n;

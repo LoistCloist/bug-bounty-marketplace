@@ -41,6 +41,7 @@ describeRepositories(
       listQueue: (now, options) => repo.listQueue(now, options),
       findActiveClaim: (id, now) => repo.findActiveClaim(id, now),
       findBounty: (id) => repo.findBounty(id),
+      listClaimedContractIds: (id, now) => repo.listClaimedContractIds(id, now),
       markFunded: (id, at) => repo.markFunded(id, at),
       setContractStatus: (id, next, now) => repo.setContractStatus(id, next, now),
     };

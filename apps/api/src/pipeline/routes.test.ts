@@ -358,6 +358,7 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     });
     const auditorStaking: AuditorStakingPort = {
       stakeOf: vi.fn(),
+      reputation: vi.fn(),
       activeSubmissions: vi.fn(async () => active),
       lockSubmission: lock,
       unlockSubmission: unlock,

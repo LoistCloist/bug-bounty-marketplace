@@ -12,6 +12,12 @@ import { Auth } from "./auth/session.js";
 import { registerAuthRoutes } from "./auth/routes.js";
 import type { BountyEscrowPort } from "./chain/bounty-escrow.js";
 import { registerContractLifecycleRoutes } from "./contracts/lifecycle-routes.js";
+import type { DisputeResolutionPort } from "./chain/dispute-resolution.js";
+import { MemoryChainActionStore } from "./chain/memory-action-store.js";
+import { MemoryDisputeRepository } from "./disputes/memory-repository.js";
+import type { DisputeRepository } from "./disputes/repository.js";
+import { registerFindingLifecycleRoutes } from "./disputes/routes.js";
+import type { FindingStatusReader, FindingStatusWriter } from "./status/finding-writer.js";
 import { loadPipelineConfig, type PipelineConfig } from "./pipeline/config.js";
 import { MemoryPipelineRepository, MemoryStore } from "./pipeline/memory-repository.js";
 import type { PipelineRepository } from "./pipeline/repository.js";
@@ -52,7 +58,16 @@ export interface AppOptions {
   /** BountyEscrow reads for the developer lifecycle routes. With it and a
    * session secret, the API is in chain mode: user routes act for the
    * signed-in wallet and confirm user transactions on-chain. */
-  bountyEscrow?: Pick<BountyEscrowPort, "readBounty">;
+  bountyEscrow?: Pick<BountyEscrowPort, "readBounty"> & Partial<Pick<BountyEscrowPort, "pendingPayouts">>;
+  /** DisputeResolution reads for disputes and rulings (chain mode). */
+  disputeResolution?: Pick<DisputeResolutionPort, "getDispute">;
+  /** AuditorStaking reads for the auditor profile (chain mode). */
+  auditorStaking?: Pick<AuditorStakingPort, "stakeOf" | "reputation">;
+  /** Defaults to an in-memory store. */
+  disputes?: DisputeRepository;
+  /** Guarded finding status writes (the chain action store). Defaults to an
+   * in-memory store over the same data as the default repositories. */
+  findingStatus?: FindingStatusReader & FindingStatusWriter;
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -82,6 +97,21 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       auth: identity,
       now: options.now ?? config.now,
     });
+    if (options.disputeResolution && options.auditorStaking && options.chainConfig) {
+      registerFindingLifecycleRoutes(app, {
+        contracts: repository,
+        pipeline,
+        disputes: options.disputes ?? new MemoryDisputeRepository(),
+        findingStatus: options.findingStatus ?? new MemoryChainActionStore(store),
+        bountyEscrow: options.bountyEscrow,
+        disputeResolution: options.disputeResolution,
+        auditorStaking: options.auditorStaking,
+        chainActions: options.chainActions,
+        arbiter: options.chainConfig.arbiterAddress,
+        auth: identity,
+        now: options.now ?? config.now,
+      });
+    }
   }
   registerPipelineRoutes(app, {
     contracts: repository,

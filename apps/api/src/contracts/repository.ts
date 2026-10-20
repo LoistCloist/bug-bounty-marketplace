@@ -47,6 +47,8 @@ export interface ContractRepository {
    * `fundedOnly` keeps only bounties confirmed funded on-chain. */
   listQueue(now: Date, options?: { fundedOnly?: boolean }): Promise<QueueItem[]>;
   findBounty(contractId: string): Promise<Bounty | null>;
+  /** Ids of contracts the auditor holds an active claim on at `now`. */
+  listClaimedContractIds(auditorId: string, now: Date): Promise<string[]>;
   /** Records that the bounty is funded on-chain. Idempotent. */
   markFunded(contractId: string, at: Date): Promise<void>;
   /** Moves the contract through the contract status machine. Null when the

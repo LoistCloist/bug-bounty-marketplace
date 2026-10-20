@@ -3,6 +3,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { createAuditorStakingPort, type AuditorStakingPort } from "./auditor-staking.js";
 import { claimLockEnabled, loadChainConfig, type ChainConfig } from "./config.js";
 import { createBountyEscrowPort, type BountyEscrowPort } from "./bounty-escrow.js";
+import { createDisputeResolutionPort, type DisputeResolutionPort } from "./dispute-resolution.js";
 
 /** Builds the AuditorStaking port against the configured RPC node, signing
  * lock/unlock with the operator key. Only called when a chain is configured. */
@@ -41,5 +42,13 @@ export function createBountyEscrowFromConfig(config: ChainConfig): BountyEscrowP
     address: config.bountyEscrowAddress as Address,
     publicClient: createPublicClient({ transport }),
     walletClient: createWalletClient({ account, transport }),
+  });
+}
+
+/** Read-only DisputeResolution port for disputes and rulings. */
+export function createDisputeResolutionFromConfig(config: ChainConfig): DisputeResolutionPort {
+  return createDisputeResolutionPort({
+    address: config.disputeResolutionAddress,
+    publicClient: createPublicClient({ transport: http(config.rpcUrl) }),
   });
 }
