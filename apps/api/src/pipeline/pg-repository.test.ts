@@ -1,9 +1,9 @@
 import { Pool } from "pg";
-import { beforeAll } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ContractRepository } from "../contracts/repository.js";
 import { PgContractRepository } from "../contracts/pg-repository.js";
 import { runMigrations } from "../db/migrate.js";
-import { describeRepositories } from "../testing/repository-suite.js";
+import { describeRepositories, makeContract, makeFinding } from "../testing/repository-suite.js";
 import type { JobStatus } from "./repository.js";
 import { PgPipelineRepository } from "./pg-repository.js";
 
@@ -14,6 +14,11 @@ const pool = databaseUrl ? new Pool({ connectionString: databaseUrl }) : undefin
 
 beforeAll(async () => {
   if (pool) await runMigrations(pool);
+});
+
+// One pool for every suite in this file; close it once they have all run.
+afterAll(async () => {
+  await pool?.end();
 });
 
 describeRepositories(
@@ -90,9 +95,43 @@ describeRepositories(
         await db.query("DELETE FROM findings WHERE contract_id = ANY($1)", [created]);
         await db.query("DELETE FROM contracts WHERE id = ANY($1)", [created]);
         await db.query("DELETE FROM bounties WHERE contract_id = ANY($1)", [created]);
-        await db.end();
       },
     };
   },
   { concurrent: true, skip: !pool },
 );
+
+describe.skipIf(!pool)("PgPipelineRepository ordering", () => {
+  it("keeps the worker's order for findings created within the same millisecond", async () => {
+    const db = pool as Pool;
+    const contracts = new PgContractRepository(db);
+    const record = makeContract();
+    await contracts.insertContract(record);
+    // The worker spaces equal-severity findings by microseconds; ids are random.
+    const first = makeFinding(record.contract.id, { id: "finding_zzz_first" });
+    const second = makeFinding(record.contract.id, { id: "finding_aaa_second" });
+    for (const [finding, at] of [
+      [first, "2026-10-20T12:00:00.000001Z"],
+      [second, "2026-10-20T12:00:00.000002Z"],
+    ] as const) {
+      await db.query(
+        `INSERT INTO findings (id, contract_id, severity, slither_detector, slither_confidence, raw_output,
+           raw_output_reference, llm_explanation, explanation_source, status, status_history, created_at)
+         VALUES ($1, $2, 'Low', 'x', 'High', '{}', $3, 'e', 'slither', 'Flagged', '[]', $4)`,
+        [finding.id, record.contract.id, finding.rawOutputReference, at],
+      );
+    }
+    try {
+      const listed = await new PgPipelineRepository(db).listFindings(
+        record.contract.id,
+        new Date(),
+      );
+      expect(listed.map((f) => f.id)).toEqual([first.id, second.id]);
+    } finally {
+      await db.query("DELETE FROM findings WHERE contract_id = $1", [record.contract.id]);
+      await db.query("DELETE FROM jobs WHERE subject_id = $1", [record.contract.id]);
+      await db.query("DELETE FROM contracts WHERE id = $1", [record.contract.id]);
+      await db.query("DELETE FROM bounties WHERE id = $1", [record.bounty.id]);
+    }
+  });
+});

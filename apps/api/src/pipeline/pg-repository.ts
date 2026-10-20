@@ -1,8 +1,7 @@
 import type { Pool } from "pg";
 import type { AnalysisStatus, Contract, Finding } from "@bbm/shared";
 import { PgContractRepository } from "../contracts/pg-repository.js";
-import type { ActiveClaim } from "../contracts/repository.js";
-import { compareFindings, toAnalysisJobStatus, toFinding } from "./mapping.js";
+import { toAnalysisJobStatus, toFinding } from "./mapping.js";
 import type { FindingRecord, JobStatus, NewPocRecord, PipelineRepository } from "./repository.js";
 
 interface FindingRow {
@@ -55,16 +54,17 @@ export class PgPipelineRepository implements PipelineRepository {
 
   async listFindings(contractId: string, now: Date): Promise<Finding[]> {
     const [result, claim] = await Promise.all([
+      // Ordered in SQL: created_at keeps the microseconds the worker uses to
+      // preserve Slither's order, which toISOString() would drop.
       this.pool.query<FindingRow>(
-        `SELECT ${FINDING_COLUMNS} FROM findings WHERE contract_id = $1`,
+        `SELECT ${FINDING_COLUMNS} FROM findings WHERE contract_id = $1
+          ORDER BY array_position(ARRAY['Critical','High','Medium','Low','Informational'], severity),
+                   created_at, id`,
         [contractId],
       ),
       this.contracts.findActiveClaim(contractId, now),
     ]);
-    return result.rows
-      .map(toRecord)
-      .sort(compareFindings)
-      .map((record) => toFinding(record, claim));
+    return result.rows.map(toRecord).map((record) => toFinding(record, claim));
   }
 
   async findFinding(id: string, now: Date): Promise<(Finding & { contract: Contract }) | null> {
@@ -79,7 +79,7 @@ export class PgPipelineRepository implements PipelineRepository {
       this.contracts.findActiveClaim(row.contract_id, now),
     ]);
     if (!contract) return null;
-    return { ...toFinding(toRecord(row), claim as ActiveClaim | null), contract };
+    return { ...toFinding(toRecord(row), claim), contract };
   }
 
   async getRawOutput(findingId: string): Promise<unknown | null> {
@@ -116,19 +116,32 @@ export class PgPipelineRepository implements PipelineRepository {
     };
   }
 
-  async submitPoc({ poc, job, findingId, now }: NewPocRecord): Promise<"ok" | "not_flagged"> {
+  async submitPoc({
+    poc,
+    job,
+    findingId,
+    now,
+  }: NewPocRecord): Promise<"ok" | "not_flagged" | "no_claim"> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const updated = await client.query(
         `UPDATE findings
             SET status = 'Submitted', status_history = status_history || $2::jsonb
-          WHERE id = $1 AND status = 'Flagged'`,
-        [findingId, JSON.stringify([{ status: "Submitted", changedAt: now }])],
+          WHERE id = $1 AND status = 'Flagged'
+            AND EXISTS (
+              SELECT 1 FROM contracts c
+               WHERE c.id = findings.contract_id AND c.status = 'Claimed'
+                 AND c.claimed_by_auditor_id = $3 AND c.claim_expires_at > $4)`,
+        [findingId, JSON.stringify([{ status: "Submitted", changedAt: now }]), poc.auditorId, now],
       );
       if (updated.rowCount !== 1) {
+        const current = await client.query<{ status: string }>(
+          "SELECT status FROM findings WHERE id = $1",
+          [findingId],
+        );
         await client.query("ROLLBACK");
-        return "not_flagged";
+        return current.rows[0]?.status === "Flagged" ? "no_claim" : "not_flagged";
       }
       await client.query(
         `INSERT INTO poc_submissions
