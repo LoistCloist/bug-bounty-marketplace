@@ -70,9 +70,12 @@ export class MemoryContractRepository implements ContractRepository {
     const stored = this.store.contracts.get(contractId);
     if (!stored || stored.claimedByAuditorId !== auditorId) return;
     stored.contract.status = "Open";
-    stored.claimedByAuditorId = null;
     stored.claimExpiresAt = null;
-    stored.claimLock = null;
+    // A pending unlock keeps the holder and the state, as in the Postgres repository.
+    if (stored.claimLock !== "unlocking") {
+      stored.claimedByAuditorId = null;
+      stored.claimLock = null;
+    }
   }
 
   async listQueue(now: Date): Promise<QueueItem[]> {

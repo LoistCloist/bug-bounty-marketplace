@@ -139,10 +139,15 @@ export class PgContractRepository implements ContractRepository {
   }
 
   async releaseClaim(contractId: string, auditorId: string): Promise<void> {
+    // A pending unlock ('unlocking') keeps the holder and the state: the sweep
+    // needs both to finish it after the claim is rolled back.
     await this.pool.query(
       `UPDATE contracts
-          SET status = 'Open', claimed_by_auditor_id = NULL, claim_expires_at = NULL,
-              claim_lock_status = NULL
+          SET status = 'Open', claim_expires_at = NULL,
+              claimed_by_auditor_id = CASE WHEN claim_lock_status = 'unlocking'
+                                           THEN claimed_by_auditor_id END,
+              claim_lock_status = CASE WHEN claim_lock_status = 'unlocking'
+                                       THEN claim_lock_status END
         WHERE id = $1 AND status = 'Claimed' AND claimed_by_auditor_id = $2`,
       [contractId, auditorId],
     );

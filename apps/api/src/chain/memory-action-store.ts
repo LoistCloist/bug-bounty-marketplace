@@ -70,14 +70,31 @@ export class MemoryChainActionStore implements ChainActionStore {
         return null;
       }
     }
-    stored.claimLock = "released";
+    stored.claimLock = "unlocking";
     return stored.claimedByAuditorId;
   }
 
-  async restoreClaimLock(contractId: string, auditorId: string): Promise<void> {
+  async findUnlockingClaims(contractId?: string): Promise<{ contractId: string; auditorId: string }[]> {
+    const out: { contractId: string; auditorId: string }[] = [];
+    for (const [id, stored] of this.store.contracts) {
+      if (contractId !== undefined && id !== contractId) continue;
+      if (stored.claimLock !== "unlocking" || !stored.claimedByAuditorId) continue;
+      out.push({ contractId: id, auditorId: stored.claimedByAuditorId });
+    }
+    return out;
+  }
+
+  async markClaimUnlocking(contractId: string, auditorId: string): Promise<boolean> {
     const stored = this.store.contracts.get(contractId);
-    if (stored?.claimLock === "released" && stored.claimedByAuditorId === auditorId) {
-      stored.claimLock = "locked";
+    if (!stored || stored.claimedByAuditorId !== auditorId) return false;
+    stored.claimLock = "unlocking";
+    return true;
+  }
+
+  async markClaimReleased(contractId: string, auditorId: string): Promise<void> {
+    const stored = this.store.contracts.get(contractId);
+    if (stored?.claimLock === "unlocking" && stored.claimedByAuditorId === auditorId) {
+      stored.claimLock = "released";
     }
   }
 

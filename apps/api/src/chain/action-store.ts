@@ -24,6 +24,9 @@ export interface PayoutDue {
  * Persistence for chain actions: the claim lock state, and the markers that
  * make each BountyEscrow write happen at most once. Findings are read and
  * written through the shared status interfaces.
+ *
+ * Claim lock states: null (never locked), "locked", "unlocking" (an unlock
+ * is intended but not yet confirmed; the sweep finishes it), "released".
  */
 export interface ChainActionStore extends FindingStatusReader, FindingStatusWriter {
   findFinding(findingId: string): Promise<FindingChainRef | null>;
@@ -36,17 +39,24 @@ export interface ChainActionStore extends FindingStatusReader, FindingStatusWrit
    * Claimed by this auditor, in which case nothing is recorded. */
   markClaimLocked(contractId: string, auditorId: string): Promise<boolean>;
   /**
-   * Atomically flips a "locked" claim to "released" and returns the auditor
+   * Atomically flips a "locked" claim to "unlocking" and returns the auditor
    * whose lock must be unlocked. Returns null, changing nothing, when there is
-   * no lock to release: never locked, already released, held by someone else
-   * (when `auditorId` is given), or not yet expired (when `expiredBy` is given).
+   * no lock to take: never locked, already unlocking or released, held by
+   * someone else (when `auditorId` is given), or not yet expired (when
+   * `expiredBy` is given).
    */
   takeClaimUnlock(
     contractId: string,
     options: { auditorId?: string; expiredBy?: Date },
   ): Promise<string | null>;
-  /** Undoes a `takeClaimUnlock` whose on-chain unlock failed. */
-  restoreClaimLock(contractId: string, auditorId: string): Promise<void>;
+  /** Claims in "unlocking": an unlock was intended but is not yet confirmed.
+   * Filtered to one contract when `contractId` is given. */
+  findUnlockingClaims(contractId?: string): Promise<{ contractId: string; auditorId: string }[]>;
+  /** Sets the claim to "unlocking" if it is still held by `auditorId`. False
+   * when it is not. Used when undoing a lock failed. */
+  markClaimUnlocking(contractId: string, auditorId: string): Promise<boolean>;
+  /** Sets an "unlocking" claim held by `auditorId` to "released". */
+  markClaimReleased(contractId: string, auditorId: string): Promise<void>;
   /** Locked claims whose expiry is at or before `now`. */
   listExpiredLockedClaims(
     now: Date,

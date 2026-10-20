@@ -344,11 +344,21 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     const store = new MemoryStore();
     const repository = new MemoryContractRepository(store);
     const clock = { now: T0 };
-    const lock = vi.fn(lockImpl);
-    const unlock = vi.fn(async () => LOCK_HASH);
+    // Keeps the lock count the way AuditorStaking does, since the chain actions
+    // read it before each unlock.
+    let active = 0n;
+    const lock = vi.fn(async (auditor: Address) => {
+      const hash = await lockImpl(auditor);
+      active += 1n;
+      return hash;
+    });
+    const unlock = vi.fn(async () => {
+      active -= 1n;
+      return LOCK_HASH;
+    });
     const auditorStaking: AuditorStakingPort = {
       stakeOf: vi.fn(),
-      activeSubmissions: vi.fn(),
+      activeSubmissions: vi.fn(async () => active),
       lockSubmission: lock,
       unlockSubmission: unlock,
     };

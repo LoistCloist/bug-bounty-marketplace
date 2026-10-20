@@ -86,10 +86,10 @@ export class PgChainActionStore implements ChainActionStore {
     contractId: string,
     options: { auditorId?: string; expiredBy?: Date },
   ): Promise<string | null> {
-    // One UPDATE decides the race: of two concurrent unlocks, only the one
+    // One UPDATE decides the race: of two concurrent takes, only the one
     // that still sees 'locked' on the row gets a row back.
     const result = await this.pool.query<{ claimed_by_auditor_id: string }>(
-      `UPDATE contracts SET claim_lock_status = 'released'
+      `UPDATE contracts SET claim_lock_status = 'unlocking'
         WHERE id = $1
           AND claim_lock_status = 'locked'
           AND ($2::text IS NULL OR claimed_by_auditor_id = $2)
@@ -100,10 +100,31 @@ export class PgChainActionStore implements ChainActionStore {
     return result.rows[0]?.claimed_by_auditor_id ?? null;
   }
 
-  async restoreClaimLock(contractId: string, auditorId: string): Promise<void> {
+  async findUnlockingClaims(contractId?: string): Promise<{ contractId: string; auditorId: string }[]> {
+    const result = await this.pool.query<{ id: string; claimed_by_auditor_id: string }>(
+      `SELECT id, claimed_by_auditor_id FROM contracts
+        WHERE claim_lock_status = 'unlocking'
+          AND claimed_by_auditor_id IS NOT NULL
+          AND ($1::text IS NULL OR id = $1)
+        ORDER BY id`,
+      [contractId ?? null],
+    );
+    return result.rows.map((row) => ({ contractId: row.id, auditorId: row.claimed_by_auditor_id }));
+  }
+
+  async markClaimUnlocking(contractId: string, auditorId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE contracts SET claim_lock_status = 'unlocking'
+        WHERE id = $1 AND claimed_by_auditor_id = $2`,
+      [contractId, auditorId],
+    );
+    return result.rowCount === 1;
+  }
+
+  async markClaimReleased(contractId: string, auditorId: string): Promise<void> {
     await this.pool.query(
-      `UPDATE contracts SET claim_lock_status = 'locked'
-        WHERE id = $1 AND claim_lock_status = 'released' AND claimed_by_auditor_id = $2`,
+      `UPDATE contracts SET claim_lock_status = 'released'
+        WHERE id = $1 AND claim_lock_status = 'unlocking' AND claimed_by_auditor_id = $2`,
       [contractId, auditorId],
     );
   }

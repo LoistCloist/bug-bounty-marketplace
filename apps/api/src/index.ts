@@ -76,6 +76,11 @@ async function start(): Promise<void> {
     payoutKeeper = startPayoutKeeper({
       intervalMs: intervalSeconds * 1000,
       runOnce: async () => {
+        // Finish unlocks left in 'unlocking' first. A failure is logged here so
+        // the payout pass still runs.
+        await chainActions
+          .finishPendingUnlocks()
+          .catch((err: unknown) => console.error("@bbm/api unlock sweep failed", err));
         const summary = await chainActions.runPayoutsOnce(new Date());
         if (summary.due > 0) console.log(`@bbm/api payout pass: ${JSON.stringify(summary)}`);
       },

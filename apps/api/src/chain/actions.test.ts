@@ -6,7 +6,7 @@ import { MemoryStore } from "../pipeline/memory-repository.js";
 import { makeContract, makeFinding } from "../testing/repository-suite.js";
 import { createChainActions, type ChainActionsDeps } from "./actions.js";
 import type { AuditorStakingPort } from "./auditor-staking.js";
-import type { BountyEscrowPort } from "./bounty-escrow.js";
+import type { BountyEscrowPort, OnchainBounty } from "./bounty-escrow.js";
 import { onchainId } from "./ids.js";
 import { MemoryChainActionStore } from "./memory-action-store.js";
 import { InvalidTransitionError } from "../status/transitions.js";
@@ -15,22 +15,70 @@ const T0 = new Date("2026-10-20T12:00:00.000Z");
 const CLAIM_WINDOW_MS = 600_000;
 const AUDITOR = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as Address;
 const HASH = `0x${"ab".repeat(32)}` as Hash;
+const ZERO_HASH = `0x${"0".repeat(64)}` as Hex;
 
-/** Fake ports: plain mocks, no RPC. */
+/** Fake ports: plain mocks, no RPC. AuditorStaking keeps a lock counter the way
+ * the contract does. BountyEscrow reads report an open, unverified bounty
+ * unless a test installs state with `statefulBounty`. */
 function fakePorts() {
   const bountyEscrow = {
     recordSubmission: vi.fn(async (_contract: Hex) => HASH),
     recordVerification: vi.fn(async (_contract: Hex, _finding: Hex, _auditor: Address) => HASH),
     payout: vi.fn(async (_contract: Hex, _finding: Hex, _auditor: Address) => HASH),
     pendingPayouts: vi.fn(async () => 0n),
+    readBounty: vi.fn(
+      async (_contract: Hex): Promise<OnchainBounty> => ({
+        state: 1,
+        submissionCount: 0n,
+        verifiedFinding: ZERO_HASH,
+        verifiedAuditor: AUDITOR,
+        frozen: false,
+      }),
+    ),
   } satisfies BountyEscrowPort & Record<string, unknown>;
+  let active = 0n;
   const auditorStaking = {
     stakeOf: vi.fn(async () => 0n),
-    activeSubmissions: vi.fn(async () => 0n),
-    lockSubmission: vi.fn(async (_auditor: Address) => HASH),
-    unlockSubmission: vi.fn(async (_auditor: Address) => HASH),
+    activeSubmissions: vi.fn(async () => active),
+    lockSubmission: vi.fn(async (_auditor: Address) => {
+      active += 1n;
+      return HASH;
+    }),
+    unlockSubmission: vi.fn(async (_auditor: Address) => {
+      if (active === 0n) throw new Error("NoActiveSubmission");
+      active -= 1n;
+      return HASH;
+    }),
   } satisfies AuditorStakingPort & Record<string, unknown>;
   return { bountyEscrow, auditorStaking };
+}
+
+/** Makes the BountyEscrow fake keep state, so writes change what reads return,
+ * as the contract does. A payout marks the bounty Paid for its finding. */
+function statefulBounty(ports: ReturnType<typeof fakePorts>) {
+  let submissions = 0n;
+  let verified: Hex = ZERO_HASH;
+  let paid = false;
+  ports.bountyEscrow.recordSubmission.mockImplementation(async () => {
+    submissions += 1n;
+    return HASH;
+  });
+  ports.bountyEscrow.recordVerification.mockImplementation(async (_c, finding) => {
+    verified = finding;
+    return HASH;
+  });
+  ports.bountyEscrow.payout.mockImplementation(async (_c, finding) => {
+    verified = finding;
+    paid = true;
+    return HASH;
+  });
+  ports.bountyEscrow.readBounty.mockImplementation(async () => ({
+    state: paid ? 2 : 1,
+    submissionCount: submissions,
+    verifiedFinding: verified,
+    verifiedAuditor: AUDITOR,
+    frozen: false,
+  }));
 }
 
 function setup(options: { lockEnabled?: boolean; withChain?: boolean } = {}) {
@@ -331,6 +379,145 @@ describe("runPayoutsOnce", () => {
     expect(store.findings.get(due1)?.status).toBe("Verified");
     expect(store.findings.get(notYet)?.status).toBe("Verified");
     await expect(chainStore.listPayoutsDue(now)).resolves.toHaveLength(0);
+  });
+});
+
+describe("retries after a chain send whose marker write failed", () => {
+  it("does not resend recordVerification", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store, chainStore } = setup();
+    statefulBounty(ports);
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    vi.spyOn(chainStore, "markVerificationRecorded").mockRejectedValueOnce(new Error("db write failed"));
+
+    await expect(actions.applyVerdict(findingId, "Passed")).rejects.toThrow("db write failed");
+    expect(ports.bountyEscrow.recordVerification).toHaveBeenCalledTimes(1);
+    expect(store.findings.get(findingId)?.status).toBe("Submitted");
+
+    await expect(actions.applyVerdict(findingId, "Passed")).resolves.toBe("Verified");
+    expect(ports.bountyEscrow.recordVerification).toHaveBeenCalledTimes(1);
+    expect(ports.bountyEscrow.recordSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resend recordSubmission", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store, chainStore } = setup();
+    statefulBounty(ports);
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    vi.spyOn(chainStore, "markSubmissionRecorded").mockRejectedValueOnce(new Error("db write failed"));
+
+    await expect(actions.applyVerdict(findingId, "Passed")).rejects.toThrow("db write failed");
+    expect(ports.bountyEscrow.recordSubmission).toHaveBeenCalledTimes(1);
+
+    await expect(actions.applyVerdict(findingId, "Passed")).resolves.toBe("Verified");
+    expect(ports.bountyEscrow.recordSubmission).toHaveBeenCalledTimes(1);
+    expect(ports.bountyEscrow.recordVerification).toHaveBeenCalledTimes(1);
+    expect(store.findings.get(findingId)?.status).toBe("Verified");
+  });
+
+  it("does not resend payout", async () => {
+    const { actions, ports, seedFinding, seedContract, chainStore, clock } = setup();
+    statefulBounty(ports);
+    const contractId = await seedContract();
+    const past = new Date(clock.now.getTime() - 3_600_000).toISOString();
+    seedFinding(contractId, "Verified", { challengeWindowExpiresAt: past, sandboxStatus: "Passed" });
+    vi.spyOn(chainStore, "markPayoutSent").mockRejectedValueOnce(new Error("db write failed"));
+
+    await expect(actions.runPayoutsOnce(clock.now)).rejects.toThrow("db write failed");
+    expect(ports.bountyEscrow.payout).toHaveBeenCalledTimes(1);
+
+    await expect(actions.runPayoutsOnce(clock.now)).resolves.toEqual({ due: 1, paid: 1, failed: 0 });
+    expect(ports.bountyEscrow.payout).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends nothing when the read that decides it fails", async () => {
+    const { actions, ports, seedFinding, seedContract, claim } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    ports.bountyEscrow.readBounty.mockRejectedValueOnce(new Error("rpc unavailable"));
+
+    await expect(actions.applyVerdict(findingId, "Passed")).rejects.toThrow("rpc unavailable");
+    expect(ports.bountyEscrow.recordSubmission).not.toHaveBeenCalled();
+    expect(ports.bountyEscrow.recordVerification).not.toHaveBeenCalled();
+  });
+});
+
+describe("unlock intent ('unlocking')", () => {
+  it("a failed unlock leaves an intent that the sweep finishes with one send", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store, chainStore } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    ports.auditorStaking.unlockSubmission.mockRejectedValueOnce(new Error("rpc unavailable"));
+
+    await expect(actions.applyVerdict(findingId, "Failed")).rejects.toThrow("rpc unavailable");
+    expect(store.contracts.get(contractId)?.claimLock).toBe("unlocking");
+    await expect(chainStore.findUnlockingClaims(contractId)).resolves.toEqual([
+      { contractId, auditorId: AUDITOR },
+    ]);
+
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(1);
+    expect(store.contracts.get(contractId)?.claimLock).toBe("released");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(2);
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(0);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not send unlock again when the send landed but its marker write failed", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, store, chainStore } = setup();
+    const contractId = await seedContract();
+    const findingId = seedFinding(contractId, "Submitted");
+    await claim(contractId);
+    vi.spyOn(chainStore, "markClaimReleased").mockRejectedValueOnce(new Error("db write failed"));
+
+    await expect(actions.applyVerdict(findingId, "Failed")).rejects.toThrow("db write failed");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(store.contracts.get(contractId)?.claimLock).toBe("unlocking");
+
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(1);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(store.contracts.get(contractId)?.claimLock).toBe("released");
+
+    // The retried verdict now completes, and still does not unlock again.
+    await expect(actions.applyVerdict(findingId, "Failed")).resolves.toBe("Rejected");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed undo of a lock leaves an intent that survives the claim rollback and is released by the sweep", async () => {
+    const { actions, ports, seedContract, repository, chainStore, store } = setup();
+    const contractId = await seedContract();
+    const expiresAt = new Date(T0.getTime() + CLAIM_WINDOW_MS);
+    const result = await repository.claimContract(contractId, AUDITOR, expiresAt, T0);
+    if (!result.ok) throw new Error("claim failed in test setup");
+    vi.spyOn(chainStore, "markClaimLocked").mockRejectedValueOnce(new Error("db down"));
+    ports.auditorStaking.unlockSubmission.mockRejectedValueOnce(new Error("rpc unavailable"));
+
+    await expect(actions.lockClaim(contractId, AUDITOR)).rejects.toThrow("could not record its lock");
+    expect(store.contracts.get(contractId)?.claimLock).toBe("unlocking");
+
+    // The route rolls the claim back. The intent must not be dropped with it.
+    await repository.releaseClaim(contractId, AUDITOR);
+    expect(store.contracts.get(contractId)?.claimLock).toBe("unlocking");
+
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(1);
+    expect(store.contracts.get(contractId)?.claimLock).toBe("released");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(2);
+  });
+
+  it("a lock that did not record and whose undo succeeds leaves no intent", async () => {
+    const { actions, ports, seedContract, repository, chainStore, store } = setup();
+    const contractId = await seedContract();
+    const expiresAt = new Date(T0.getTime() + CLAIM_WINDOW_MS);
+    await repository.claimContract(contractId, AUDITOR, expiresAt, T0);
+    vi.spyOn(chainStore, "markClaimLocked").mockRejectedValueOnce(new Error("db down"));
+
+    await expect(actions.lockClaim(contractId, AUDITOR)).rejects.toThrow("could not record its lock");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(store.contracts.get(contractId)?.claimLock).not.toBe("unlocking");
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(0);
   });
 });
 
