@@ -3,6 +3,7 @@
 import { use } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { developerApi, ApiError } from "@/lib/api";
+import { AnalysisNotice } from "../_components/AnalysisNotice";
 import { FindingCard } from "../_components/FindingCard";
 
 const POLL_INTERVAL_MS = 2000;
@@ -31,6 +32,12 @@ export default function ContractDetailPage({
   const findingsQuery = useQuery({
     queryKey: ["findings", id],
     queryFn: () => developerApi.listFindings(id),
+    refetchInterval: POLL_INTERVAL_MS,
+  });
+
+  const analysisQuery = useQuery({
+    queryKey: ["analysis", id],
+    queryFn: () => developerApi.getAnalysisStatus(id),
     refetchInterval: POLL_INTERVAL_MS,
   });
 
@@ -124,9 +131,7 @@ export default function ContractDetailPage({
 
       <h2 className="mt-10 text-lg font-semibold text-white">Findings</h2>
       {findings.length === 0 ? (
-        <p className="mt-3 text-sm text-slate-400">
-          Analysis is still running - findings will appear here automatically once ready.
-        </p>
+        <AnalysisNotice status={analysisQuery.data} />
       ) : (
         <div className="mt-4 space-y-4">
           {findings.map((finding) => (

@@ -98,11 +98,21 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
         >
           {showRaw ? "Hide raw Slither output" : "Show raw Slither output"}
         </button>
-        {showRaw && (
-          <pre className="mt-2 overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-slate-400">
-            {finding.rawOutputReference}
-          </pre>
-        )}
+        {showRaw &&
+          (finding.rawOutputReference.startsWith("/api/") ? (
+            <a
+              href={finding.rawOutputReference}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 block text-xs text-emerald-400 underline hover:text-emerald-300"
+            >
+              Open raw Slither JSON
+            </a>
+          ) : (
+            <pre className="mt-2 overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-slate-400">
+              {finding.rawOutputReference}
+            </pre>
+          ))}
       </div>
 
       {canDispute && (
