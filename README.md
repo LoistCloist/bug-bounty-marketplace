@@ -151,6 +151,16 @@ NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled NEXT_PUBLIC_LI
   API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
 ```
 
+`pnpm demo:lifecycle` runs the whole lifecycle against the demo stack from
+the command line, with cast signing for each role. The payout path is fund,
+stake, claim, passing PoC, Verified, Paid after the 60-second window, then
+withdraw. The dispute path is a second bounty, Verified, disputed, then
+ruled against the auditor, which rejects the finding and slashes half the
+stake. It prints `LIFECYCLE OK` (needs `curl` and `jq`). The same two paths
+run in the browser with
+`E2E_CHAIN=1 pnpm test:e2e -- lifecycle`, against a fresh `pnpm stack:demo`
+and the web app above.
+
 If a step fails after its transaction went through (for example the API was
 unreachable), repeat it: a step that already happened on-chain goes straight
 to the API call.

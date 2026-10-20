@@ -18,6 +18,9 @@ import { expect, test, type Page } from "@playwright/test";
 const FIXTURES = path.resolve(process.cwd(), "../workers/analysis/tests/fixtures");
 
 test.skip(!process.env.E2E_CHAIN, "needs pnpm stack:demo and the web app in live chain mode");
+// One auditor account plays both tests, and an auditor holds one claim at a
+// time, so they run in order: payout first, which releases the claim.
+test.describe.configure({ mode: "serial" });
 
 /**
  * Developer: upload Vault.sol with a bounty of a unique amount (the PoC
