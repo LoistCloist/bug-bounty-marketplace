@@ -248,7 +248,11 @@ export function describeRepositories(
       const active = await insert();
       const expired = await insert();
       await h.contracts.claimContract(active.contract.id, "auditor_1", minutes(30), T0);
-      await h.contracts.claimContract(expired.contract.id, "auditor_1", minutes(5), T0);
+      // A different auditor: auditor_1 already holds the active claim above, and
+      // one auditor may hold one claim at a time.
+      expect(
+        (await h.contracts.claimContract(expired.contract.id, "auditor_2", minutes(5), T0)).ok,
+      ).toBe(true);
       const queue = await h.contracts.listQueue(minutes(10));
       const ids = queue.map((c) => c.id);
       expect(ids).toContain(open.contract.id);

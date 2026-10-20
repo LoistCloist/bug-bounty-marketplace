@@ -110,7 +110,7 @@ export class MemoryContractRepository implements ContractRepository {
     const items: QueueItem[] = [];
     for (const stored of this.store.contracts.values()) {
       const contract = this.store.view(stored, now);
-      if (contract.status !== "Open") continue;
+      if (contract.status !== "Open" || !lockIsFree(stored.claimLock)) continue;
       const bounty = this.store.bounties.get(contract.bountyId);
       items.push({
         ...contract,
