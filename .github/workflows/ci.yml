@@ -27,6 +27,7 @@ jobs:
       shared: ${{ steps.filter.outputs.shared }}
       contracts: ${{ steps.filter.outputs.contracts }}
       analysis: ${{ steps.filter.outputs.analysis }}
+      sandbox: ${{ steps.filter.outputs.sandbox }}
       containers: ${{ steps.filter.outputs.containers }}
       infra: ${{ steps.filter.outputs.infra }}
       helm: ${{ steps.filter.outputs.helm }}
@@ -87,6 +88,15 @@ jobs:
               - 'packages/shared/schema/**'
               # The worker's DB tests apply the API's migrations.
               - 'apps/api/src/db/migrations/**'
+              - '.github/workflows/ci.yml'
+
+            # PoC sandbox image and the worker code that drives it.
+            sandbox:
+              - 'workers/sandbox/**'
+              - 'workers/analysis/src/analysis/solc-versions.txt'
+              - 'workers/analysis/src/analysis/sandbox.py'
+              - 'workers/analysis/tests/test_sandbox.py'
+              - 'workers/analysis/tests/fixtures/**'
               - '.github/workflows/ci.yml'
 
             # Anything that can change a container image or the compose
@@ -402,6 +412,38 @@ jobs:
         run: uv run pytest -m slither -q
 
   # ---------------------------------------------------------------------
+  # sandbox - builds the offline Foundry image auditors' PoCs run in, then
+  # runs real PoCs through it: one that passes, one that fails, one that
+  # hangs (must be killed at the time limit), one that tries to reach the
+  # network, and a filename with spaces.
+  # ---------------------------------------------------------------------
+  sandbox:
+    name: sandbox
+    needs: changes
+    if: needs.changes.outputs.sandbox == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build sandbox image
+        run: docker build -f workers/sandbox/Dockerfile -t bbm-sandbox:latest workers
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: workers/analysis/uv.lock
+
+      - name: Install dependencies
+        working-directory: workers/analysis
+        run: uv sync --frozen
+
+      - name: Sandbox integration tests
+        working-directory: workers/analysis
+        run: uv run pytest -m docker -q
+
+  # ---------------------------------------------------------------------
   # containers - lint every Dockerfile, build every image (BuildKit, GHA
   # layer cache, never pushed), then boot the full compose stack and
   # smoke-test it: health endpoints, a contract upload through the web
@@ -423,7 +465,7 @@ jobs:
 
       - name: Lint Dockerfiles (hadolint)
         run: |
-          for f in apps/api/Dockerfile apps/web/Dockerfile workers/analysis/Dockerfile contracts/Dockerfile; do
+          for f in apps/api/Dockerfile apps/web/Dockerfile workers/analysis/Dockerfile workers/sandbox/Dockerfile contracts/Dockerfile; do
             echo "::group::$f"
             docker run --rm -i hadolint/hadolint:v2.12.0 < "$f"
             echo "::endgroup::"
@@ -705,6 +747,7 @@ jobs:
       - api
       - contracts
       - analysis
+      - sandbox
       - containers
       - terraform-static
       - helm
@@ -724,6 +767,7 @@ jobs:
             [api]="${{ needs.api.result }}"
             [contracts]="${{ needs.contracts.result }}"
             [analysis]="${{ needs.analysis.result }}"
+            [sandbox]="${{ needs.sandbox.result }}"
             [containers]="${{ needs.containers.result }}"
             [terraform-static]="${{ needs.terraform-static.result }}"
             [helm]="${{ needs.helm.result }}"

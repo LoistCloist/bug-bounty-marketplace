@@ -43,3 +43,19 @@ import "../src/Vault.sol";
 
 The PoC passes, and the finding becomes Verified, when at least one test
 passes and none fail.
+
+## Running it with the stack
+
+Sandbox jobs are only claimed when the analysis service has
+`SANDBOX_ENABLED=true` and the Docker socket, which the opt-in overlay adds:
+
+```sh
+docker build -f workers/sandbox/Dockerfile -t bbm-sandbox:latest workers
+export DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build --wait db api analysis
+```
+
+The analysis image stays non-root (uid 10001); `group_add` gives it the
+socket's group. In AKS the plan is Kata-isolated pods instead of the socket
+(see `docs/adr/0001-azure-environment-topology.md`, §8).
+
