@@ -17,7 +17,7 @@ This package has no `test` script on purpose. That means `pnpm -r test` and
 | **Regression**         | `tests/regression/` (API goldens), `contracts/.gas-snapshot`, `packages/shared/schema` drift        | vitest project `regression`, `forge snapshot --check`, `git diff --exit-code` | `ci.yml`: `containers` job (goldens), `contracts` job (gas), `shared` job (schema)                                                          | Stack under test only (goldens). The other two checks are offline.                |
 | **Smoke**              | `tests/smoke/`                                                                                      | vitest project `smoke`                                                        | `ci.yml` `containers` job. In Azure: after every ACA test-env / preview deploy and after `deploy.yml` / `env-power resume` on staging/prod. | Stack under test only. Read-only unless `BBM_SMOKE_WRITE=1` (never set for prod). |
 | **E2E**                | `tests/e2e/`                                                                                        | Playwright (chromium)                                                         | `ci.yml` `containers` job (compose stack). Also `integration-azure.yml`, against the ACA test env's `web_url`                               | Browser → web under test only                                                     |
-| **Load**               | `tests/load/`                                                                                       | k6 (`grafana/k6:2.3.0`)                                                       | `integration-azure.yml` when dispatched with `load: true` (manual)                                                                          | API under test only. Never prod, because setup writes a row.                      |
+| **Load**               | `tests/load/`                                                                                       | k6 (`grafana/k6:2.3.0`)                                                       | `integration-azure.yml` nightly, or when dispatched with `load: true`                                                                       | API under test only. Never prod, because setup writes a row.                      |
 
 ## Running locally
 
@@ -85,9 +85,6 @@ The other regression gates have their own update commands:
 
 ## Pointing the suites at Azure
 
-> The Azure workflows below land in the `ci/azure-workflows` sub-branch of
-> `feat/m3-devops`; until then only the compose-based `containers` job runs.
-
 The Azure workflows don't build anything test-specific. They export the
 `BBM_*` env from Terraform outputs and run the same commands:
 
@@ -97,8 +94,9 @@ The Azure workflows don't build anything test-specific. They export the
      `BBM_WEB_URL=$(tf output -raw web_url)` and `BBM_SKIP_ANALYSIS=1`.
      These are https URLs. Analysis has no external ingress. There is no
      chain, so the chain tests skip on the missing deployments file.
-  3. Runs `pnpm test:smoke`, `pnpm test:integration` and `pnpm test:e2e`.
-     When dispatched with `load: true`, it also runs k6 with
+  3. Runs `pnpm test:smoke` (with `BBM_SMOKE_WRITE=1`), `pnpm test:integration`
+     and `pnpm test:e2e`. Nightly, or when dispatched with `load: true`, it
+     also runs k6 with
      `BASE_URL=$BBM_API_URL`.
   4. Always destroys the env.
 - **`preview.yml`** (PR preview, ACA, mocked web) runs `pnpm test:smoke`

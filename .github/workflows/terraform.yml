@@ -1,0 +1,455 @@
+name: Terraform
+
+# Cloud plan/apply for infra/terraform. Static checks (fmt, validate, tflint,
+# terraform test) live in ci.yml and need no Azure credentials; this workflow
+# is the only place that talks to the real backend/state.
+#
+#   pull_request       plan global + staging-{data,compute} with the read-only
+#                      plan identity, sticky PR comment per stack
+#   push to main       auto-apply the global stack when it (or its inputs) changed
+#   workflow_dispatch  plan (and optionally apply) one stack in its environment
+#
+# Auth is GitHub OIDC only (no secrets). Everything skips green until the
+# bootstrap stack has set the repo variables (see infra/terraform/README.md).
+
+on:
+  pull_request:
+    paths:
+      - 'infra/terraform/**'
+      - '.github/workflows/terraform.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infra/terraform/**'
+      - '.github/workflows/terraform.yml'
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: 'Stack to plan/apply'
+        required: true
+        type: choice
+        options:
+          - global
+          - staging-data
+          - staging-compute
+          - prod-data
+          - prod-compute
+      action:
+        description: 'plan only, or plan then apply the saved plan'
+        required: true
+        type: choice
+        default: plan
+        options:
+          - plan
+          - apply
+
+# Each job opts into exactly what it needs.
+permissions: {}
+
+env:
+  ARM_USE_OIDC: 'true'
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  # scripts/tf.sh overrides the backend file's RG/account with these and
+  # exports them as TF_VAR_tfstate_* for terraform_remote_state.
+  TFSTATE_RG: ${{ vars.TFSTATE_RG }}
+  TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
+  TF_IN_AUTOMATION: '1'
+  TERRAFORM_VERSION: '1.9.8'
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Skip everything until bootstrap has populated the repo variables, and
+  # never run for fork PRs (they get no OIDC token / repo vars anyway, and
+  # must not be able to post plan output).
+  # ---------------------------------------------------------------------
+  gate:
+    name: Gate on Azure configuration
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Check repo variables and PR origin
+        id: check
+        env:
+          HAS_SUB: ${{ vars.AZURE_SUBSCRIPTION_ID != '' }}
+          HAS_STATE: ${{ vars.TFSTATE_ACCOUNT != '' }}
+          SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          if [[ "$HAS_SUB" == "true" && "$HAS_STATE" == "true" && "$SAME_REPO" == "true" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Terraform workflow skipped (AZURE_SUBSCRIPTION_ID set: $HAS_SUB, TFSTATE_ACCOUNT set: $HAS_STATE, same-repo: $SAME_REPO)"
+          fi
+
+  # ---------------------------------------------------------------------
+  # PR plans with the read-only plan identity (gh-bbm-plan, no GitHub
+  # environment). It can read global.tfstate and staging/* but NOT prod/*,
+  # and cannot take the state lease, hence -lock=false. Prod stacks are
+  # planned only via workflow_dispatch in the `prod` environment.
+  #
+  # staging-* PR plans run with -refresh=false: the plan identity is
+  # control-plane Reader only, with no Key Vault data-plane access (the
+  # data stack's azurerm_key_vault_secret reads) and no AKS
+  # listClusterUserCredential (refreshing the compute stack's
+  # azurerm_kubernetes_cluster reads kube_config), so a refresh would
+  # 403. Data sources are still read; all of them here are
+  # control-plane / state reads the identity has. They diff config
+  # against the last-applied state, not live Azure. Fully refreshed plans
+  # run via workflow_dispatch in the staging/prod environments. global
+  # has no data-plane resources, so its PR plan keeps refreshing.
+  # ---------------------------------------------------------------------
+  plan-pr:
+    name: Plan (${{ matrix.id }})
+    needs: gate
+    if: github.event_name == 'pull_request' && needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: global
+            stack: global
+            env: global
+            # State blobs that must exist before this stack can plan.
+            requires: ''
+            # Extra plan flags (see the job comment for -refresh=false).
+            plan_flags: ''
+          - id: staging-data
+            stack: data
+            env: staging
+            requires: 'global.tfstate'
+            plan_flags: '-refresh=false'
+          - id: staging-compute
+            stack: compute
+            env: staging
+            requires: 'global.tfstate staging/data.tfstate'
+            plan_flags: '-refresh=false'
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+      STACK: ${{ matrix.stack }}
+      TF_ENV: ${{ matrix.env }}
+      STACK_ID: ${{ matrix.id }}
+      REQUIRES: ${{ matrix.requires }}
+      PLAN_FLAGS: ${{ matrix.plan_flags }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          # Raw exit codes / stdout so -detailed-exitcode and tee work.
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC, plan identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # compute reads <env>/data.tfstate and data reads global.tfstate via
+      # terraform_remote_state; if an upstream layer was never applied the
+      # plan would just error, so report it as skipped instead.
+      - name: Check upstream state
+        id: deps
+        run: |
+          missing=""
+          for key in $REQUIRES; do
+            exists=$(az storage blob exists \
+              --auth-mode login \
+              --account-name "$TFSTATE_ACCOUNT" \
+              --container-name tfstate \
+              --name "$key" \
+              --query exists -o tsv)
+            if [[ "$exists" != "true" ]]; then
+              missing="$missing $key"
+            fi
+          done
+          missing="${missing# }"
+          echo "missing=$missing" >> "$GITHUB_OUTPUT"
+          if [[ -n "$missing" ]]; then
+            echo "::notice::$STACK_ID skipped: upstream state not applied ($missing)"
+          fi
+
+      - name: Terraform init
+        if: steps.deps.outputs.missing == ''
+        run: ./infra/terraform/scripts/tf.sh "$STACK" "$TF_ENV" init
+
+      # tf.sh already passes -input=false and the env var-file. The -out path
+      # is relative to stacks/<stack>. -detailed-exitcode: 0 = no changes,
+      # 1 = error, 2 = changes present.
+      - name: Terraform plan
+        id: plan
+        if: steps.deps.outputs.missing == ''
+        run: |
+          set +e
+          # shellcheck disable=SC2086 # PLAN_FLAGS is a flag list or empty.
+          ./infra/terraform/scripts/tf.sh "$STACK" "$TF_ENV" plan \
+            -lock=false $PLAN_FLAGS -no-color -detailed-exitcode -out=tfplan 2>&1 | tee "$RUNNER_TEMP/plan.txt"
+          code=${PIPESTATUS[0]}
+          set -e
+          case "$code" in
+            0) echo "result=no changes" >> "$GITHUB_OUTPUT" ;;
+            2) echo "result=changes" >> "$GITHUB_OUTPUT" ;;
+            *) echo "result=failed" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Build comment
+        if: always() && steps.deps.outcome == 'success'
+        env:
+          MISSING: ${{ steps.deps.outputs.missing }}
+          RESULT: ${{ steps.plan.outputs.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          body="$RUNNER_TEMP/comment.md"
+          {
+            echo "### Terraform plan: \`$STACK_ID\` (\`stacks/$STACK\`, env \`$TF_ENV\`)"
+            echo
+            if [[ -n "$MISSING" ]]; then
+              echo "**skipped: data layer not applied** (missing state: \`$MISSING\`)."
+              echo "Apply the upstream stack first via the Terraform workflow_dispatch."
+            else
+              echo "**Result:** ${RESULT:-failed} · commit \`${HEAD_SHA:0:7}\` · [run]($RUN_URL)"
+              echo
+              if [[ "$PLAN_FLAGS" == *-refresh=false* ]]; then
+                echo "> **Unrefreshed plan** (\`-refresh=false\`): diffs this PR's config against the last-applied state, not live Azure. Drift is not shown. The read-only PR plan identity has no Key Vault data-plane or AKS credential access; run the Terraform workflow_dispatch (\`staging\` environment) for a fully refreshed plan."
+                echo
+              fi
+              echo '<details><summary>Plan output</summary>'
+              echo
+              echo '```'
+              # Keep the whole comment under GitHub's 65,536-char limit.
+              if [[ -f "$RUNNER_TEMP/plan.txt" ]]; then
+                if [[ $(wc -c < "$RUNNER_TEMP/plan.txt") -gt 60000 ]]; then
+                  head -c 60000 "$RUNNER_TEMP/plan.txt"
+                  echo
+                  echo "... (truncated, see the run log for the full plan)"
+                else
+                  cat "$RUNNER_TEMP/plan.txt"
+                fi
+              fi
+              echo '```'
+              echo '</details>'
+            fi
+            echo
+            echo "_prod-data / prod-compute are not planned on PRs: the PR plan identity cannot read \`prod/\` state. Plan them with workflow_dispatch (runs in the \`prod\` environment)._"
+          } > "$body"
+          cat "$body" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sticky PR comment
+        if: always() && steps.deps.outcome == 'success'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: terraform-plan-${{ matrix.id }}
+          path: ${{ runner.temp }}/comment.md
+
+      - name: Fail on plan error
+        if: steps.plan.outputs.result == 'failed'
+        run: |
+          echo "::error::terraform plan failed for $STACK_ID (exit ${{ steps.plan.outputs.exitcode }})"
+          exit 1
+
+  # ---------------------------------------------------------------------
+  # Decide whether a push to main touched anything the global stack
+  # depends on (same dorny/paths-filter pattern as ci.yml).
+  # ---------------------------------------------------------------------
+  changes:
+    name: Detect global stack changes
+    needs: gate
+    if: github.event_name == 'push' && needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      global: ${{ steps.filter.outputs.global }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Filter paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            global:
+              - 'infra/terraform/stacks/global/**'
+              - 'infra/terraform/envs/global/global.tfvars'
+              - 'infra/terraform/envs/global/backend.hcl'
+              - 'infra/terraform/modules/**'
+              - 'infra/terraform/scripts/tf.sh'
+              - '.github/workflows/terraform.yml'
+
+  # ---------------------------------------------------------------------
+  # Auto-apply the global stack (ACR, shared LAW/KV, ACA pull identity) on
+  # main. Runs as gh-bbm-global in the `infra-global` environment, whose
+  # required reviewer gates the apply; AZURE_CLIENT_ID is the environment's
+  # variable. Shares the tf-global concurrency group with dispatch runs.
+  # ---------------------------------------------------------------------
+  apply-global:
+    name: Apply global
+    needs: [gate, changes]
+    if: needs.changes.outputs.global == 'true'
+    runs-on: ubuntu-latest
+    environment: infra-global
+    concurrency:
+      group: tf-global
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: ./infra/terraform/scripts/tf.sh global global init
+
+      - name: Terraform plan
+        run: |
+          set -o pipefail
+          ./infra/terraform/scripts/tf.sh global global plan -no-color -out=tfplan 2>&1 \
+            | tee "$RUNNER_TEMP/plan.txt"
+          {
+            echo "### Terraform plan: \`global\`"
+            echo '```'
+            head -c 60000 "$RUNNER_TEMP/plan.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform apply
+        run: ./infra/terraform/scripts/tf.sh global global apply tfplan
+
+  # ---------------------------------------------------------------------
+  # Manual plan / apply of one stack in its GitHub environment:
+  #   global -> infra-global (gh-bbm-global)
+  #   staging-* -> staging (gh-bbm-staging)
+  #   prod-* -> prod (gh-bbm-prod, required reviewer)
+  # Plan and apply run in the same job so prod needs a single approval and
+  # the applied plan is exactly the one reviewed in the log. Only the plan
+  # *text* is uploaded; the binary plan can contain sensitive values.
+  # ---------------------------------------------------------------------
+  dispatch:
+    name: ${{ inputs.action }} ${{ inputs.stack }}
+    needs: gate
+    if: github.event_name == 'workflow_dispatch' && needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stack == 'global' && 'infra-global' || (startsWith(inputs.stack, 'staging-') && 'staging' || 'prod') }}
+    # Compute stacks share env-<env> with env-power.yml (down/up) and
+    # deploy.yml so a compute apply never races a power action or deploy.
+    concurrency:
+      group: ${{ endsWith(inputs.stack, '-compute') && format('env-{0}', startsWith(inputs.stack, 'prod') && 'prod' || 'staging') || format('tf-{0}', inputs.stack) }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      STACK_ID: ${{ inputs.stack }}
+      ACTION: ${{ inputs.action }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve stack and env
+        id: target
+        run: |
+          case "$STACK_ID" in
+            global)          stack=global;  env=global;  requires="" ;;
+            staging-data)    stack=data;    env=staging; requires="global.tfstate" ;;
+            staging-compute) stack=compute; env=staging; requires="global.tfstate staging/data.tfstate" ;;
+            prod-data)       stack=data;    env=prod;    requires="global.tfstate" ;;
+            prod-compute)    stack=compute; env=prod;    requires="global.tfstate prod/data.tfstate" ;;
+            *) echo "::error::unknown stack $STACK_ID"; exit 1 ;;
+          esac
+          {
+            echo "stack=$stack"
+            echo "env=$env"
+            echo "requires=$requires"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Fail early with a clear message instead of a remote_state error.
+      - name: Check upstream state
+        env:
+          REQUIRES: ${{ steps.target.outputs.requires }}
+        run: |
+          for key in $REQUIRES; do
+            exists=$(az storage blob exists \
+              --auth-mode login \
+              --account-name "$TFSTATE_ACCOUNT" \
+              --container-name tfstate \
+              --name "$key" \
+              --query exists -o tsv)
+            if [[ "$exists" != "true" ]]; then
+              echo "::error::upstream state $key not found: apply that layer first (data before compute, global before both)"
+              exit 1
+            fi
+          done
+
+      - name: Terraform init
+        env:
+          STACK: ${{ steps.target.outputs.stack }}
+          TF_ENV: ${{ steps.target.outputs.env }}
+        run: ./infra/terraform/scripts/tf.sh "$STACK" "$TF_ENV" init
+
+      - name: Terraform plan
+        env:
+          STACK: ${{ steps.target.outputs.stack }}
+          TF_ENV: ${{ steps.target.outputs.env }}
+        run: |
+          set -o pipefail
+          ./infra/terraform/scripts/tf.sh "$STACK" "$TF_ENV" plan -no-color -out=tfplan 2>&1 \
+            | tee "$RUNNER_TEMP/plan.txt"
+          {
+            echo "### Terraform plan: \`$STACK_ID\` ($ACTION)"
+            echo '```'
+            head -c 60000 "$RUNNER_TEMP/plan.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plan text
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.stack }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plan.txt
+          retention-days: 14
+
+      - name: Terraform apply
+        if: inputs.action == 'apply'
+        env:
+          STACK: ${{ steps.target.outputs.stack }}
+          TF_ENV: ${{ steps.target.outputs.env }}
+        run: ./infra/terraform/scripts/tf.sh "$STACK" "$TF_ENV" apply tfplan
