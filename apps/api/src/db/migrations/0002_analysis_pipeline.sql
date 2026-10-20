@@ -8,9 +8,10 @@
 -- Guarded by a catalog check rather than ADD COLUMN IF NOT EXISTS: ALTER TABLE
 -- takes an ACCESS EXCLUSIVE lock even when the column already exists, and
 -- this file re-runs on every API boot, so it would queue behind (and then
--- block) every reader of contracts, e.g. a worker mid-analysis. (The CREATE
--- INDEX IF NOT EXISTS statements below still take a brief SHARE lock on
--- re-run, which waits only for in-flight writes.)
+-- block) every reader of contracts, e.g. a worker mid-analysis. The indexes
+-- below are guarded the same way: CREATE INDEX IF NOT EXISTS takes a SHARE lock
+-- on its table even when the index exists, which deadlocks against concurrent
+-- multi-table writes (see 0001).
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -49,7 +50,13 @@ CREATE TABLE IF NOT EXISTS findings (
   created_at                  TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS findings_contract_id_idx ON findings (contract_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'findings_contract_id_idx') THEN
+    CREATE INDEX findings_contract_id_idx ON findings (contract_id);
+  END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS poc_submissions (
   id                  TEXT PRIMARY KEY,
@@ -62,7 +69,13 @@ CREATE TABLE IF NOT EXISTS poc_submissions (
   sandbox_log         TEXT
 );
 
-CREATE INDEX IF NOT EXISTS poc_submissions_finding_id_idx ON poc_submissions (finding_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'poc_submissions_finding_id_idx') THEN
+    CREATE INDEX poc_submissions_finding_id_idx ON poc_submissions (finding_id);
+  END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS jobs (
   id               TEXT PRIMARY KEY,
@@ -77,8 +90,16 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at       TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS jobs_claimable_idx ON jobs (status, created_at);
-CREATE INDEX IF NOT EXISTS jobs_subject_idx ON jobs (subject_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'jobs_claimable_idx') THEN
+    CREATE INDEX jobs_claimable_idx ON jobs (status, created_at);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'jobs_subject_idx') THEN
+    CREATE INDEX jobs_subject_idx ON jobs (subject_id);
+  END IF;
+END
+$$;
 
 -- Open or claimed contracts stored before this migration never got an
 -- analysis job; queue one for each so they are analysed too. New contracts
