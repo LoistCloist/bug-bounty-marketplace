@@ -1,0 +1,161 @@
+{{- if .Values.analysis.enabled }}
+{{- $v := .Values.analysis -}}
+{{- $name := include "bbm.componentName" (dict "root" $ "component" "analysis") -}}
+{{- $csi := include "bbm.csi" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "analysis") | nindent 4 }}
+spec:
+  {{- if not $v.keda.enabled }}
+  replicas: {{ $v.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "bbm.selectorLabels" (dict "root" $ "component" "analysis") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bbm.labels" (dict "root" $ "component" "analysis") | nindent 8 }}
+        {{- if include "bbm.useWorkloadIdentity" (dict "root" $ "clientId" .Values.azure.workerClientId) }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+        {{- with $v.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "bbm.checksums" . | nindent 8 }}
+        {{- with $v.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      {{- with (include "bbm.imagePullSecrets" . | trim) }}{{ . | nindent 6 }}{{- end }}
+      {{- include "bbm.podSecurityContext" (dict "uid" $v.runAsUser "gid" $v.runAsGroup) | nindent 6 }}
+      {{- with (include "bbm.scheduling" (dict "root" $ "values" $v "component" "analysis") | trim) }}{{ . | nindent 6 }}{{- end }}
+      containers:
+        - name: analysis
+          image: {{ include "bbm.image" (dict "root" $ "image" $v.image) }}
+          imagePullPolicy: {{ include "bbm.imagePullPolicy" (dict "root" $ "image" $v.image) }}
+          ports:
+            - name: http
+              containerPort: {{ $v.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "bbm.fullname" . }}-config
+          env:
+            - name: PORT
+              value: {{ $v.port | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "bbm.analysisSecretName" . }}
+                  key: llm-api-key
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          {{- include "bbm.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if $csi }}
+            - name: secrets-store
+              mountPath: {{ .Values.secrets.csi.mountPath }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if $csi }}
+        {{- include "bbm.csiVolume" (dict "spc" (printf "%s-analysis" .Values.secrets.csi.secretProviderClassName)) | nindent 8 }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "analysis") | nindent 4 }}
+spec:
+  type: {{ $v.service.type }}
+  selector:
+    {{- include "bbm.selectorLabels" (dict "root" $ "component" "analysis") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $v.port }}
+      targetPort: http
+      protocol: TCP
+{{- if $v.keda.enabled }}
+{{- $_ := include "bbm.requireInfra" (dict "root" $ "key" "azure.storageAccountName" "value" .Values.azure.storageAccountName) }}
+{{- $_ := include "bbm.requireInfra" (dict "root" $ "key" "azure.workerClientId" "value" .Values.azure.workerClientId) }}
+---
+# KEDA authenticates to the queue as the worker identity. With the AKS KEDA
+# add-on the federated credential must also trust the KEDA operator
+# (system:serviceaccount:kube-system:keda-operator) for that identity.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ $name }}-queue
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "analysis") | nindent 4 }}
+spec:
+  podIdentity:
+    provider: azure-workload
+    {{- with .Values.azure.workerClientId }}
+    identityId: {{ . | quote }}
+    {{- end }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "analysis") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $name }}
+  minReplicaCount: {{ $v.keda.minReplicaCount }}
+  maxReplicaCount: {{ $v.keda.maxReplicaCount }}
+  pollingInterval: {{ $v.keda.pollingInterval }}
+  cooldownPeriod: {{ $v.keda.cooldownPeriod }}
+  triggers:
+    - type: azure-queue
+      metadata:
+        queueName: {{ .Values.azure.queueName | quote }}
+        accountName: {{ .Values.azure.storageAccountName | quote }}
+        queueLength: {{ $v.keda.queueLength | quote }}
+      authenticationRef:
+        name: {{ $name }}-queue
+{{- end }}
+{{- end }}

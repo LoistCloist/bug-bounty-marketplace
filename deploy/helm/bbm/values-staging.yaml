@@ -1,0 +1,74 @@
+# Staging (AKS aks-bbm-staging-eus2). Layer on top of values.yaml, then
+# values-infra.yaml (terraform compute output), then the image tag:
+#
+#   helm upgrade --install bbm deploy/helm/bbm -n bbm \
+#     -f deploy/helm/bbm/values-staging.yaml -f values-infra.yaml \
+#     --set global.image.tag=sha-xxxxxxx --set global.requireInfraValues=true
+#
+# Everything environment-specific that terraform knows (ACR registry, client
+# IDs, Key Vault, storage, ingress host/PIP, Postgres CIDR) comes from
+# values-infra.yaml and is intentionally NOT set here.
+
+global:
+  # Deliberately unpinned (unlike prod's bbm.io/pool=apps): the staging apps
+  # node pool is disabled by default in terraform to save vCPU quota, so the
+  # app pods run on the system pool. Pin to bbm.io/pool=apps here only after
+  # enabling that pool in the staging compute stack.
+  nodeSelector: {}
+
+config:
+  logLevel: debug
+
+secrets:
+  # Key Vault -> SecretProviderClass bbm-kv -> Secret bbm-secrets.
+  provider: csi
+
+azure:
+  workloadIdentity:
+    enabled: true
+
+web:
+  hpa:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+  # No PDB in staging (single replica most of the time).
+  pdb:
+    enabled: false
+
+api:
+  hpa:
+    # Pinned to exactly one replica until the Blob storage adapter lands:
+    # uploaded sources live on a per-pod emptyDir (SOURCE_STORAGE_DIR), so a
+    # second replica would not see files uploaded to the first.
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 1
+  pdb:
+    enabled: false
+
+migrations:
+  # Run migrations as a hook Job; the api starts with MIGRATE_ON_BOOT=false.
+  enabled: true
+
+ingress:
+  enabled: true
+  className: bbm-nginx
+  # host / publicIpName / publicIpResourceGroup: from values-infra.yaml
+  tls:
+    mode: none
+  appRouting:
+    enabled: true
+    scaling:
+      minReplicas: 1
+      maxReplicas: 2
+
+networkPolicy:
+  enabled: true
+  restrictEgress: true
+  # postgresCidr: from values-infra.yaml
+
+analysis:
+  enabled: false
+sandbox:
+  enabled: false

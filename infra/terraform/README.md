@@ -42,23 +42,36 @@ cd infra/terraform
 ./scripts/tf.sh global global apply tfplan
 ./scripts/tf.sh global global validate              # init -backend=false + validate (no creds)
 TF_STATE_KEY=test/run-123-1.tfstate ./scripts/tf.sh aca-ephemeral test plan
+./scripts/tf.sh aca-ephemeral test validate         # no TF_STATE_KEY needed
 ```
 
-| stack           | envs             | var-file                       | backend file                                 | state key                |
-|-----------------|------------------|--------------------------------|----------------------------------------------|--------------------------|
-| `bootstrap`     | `global`         | `envs/global/bootstrap.tfvars` | `envs/global/backend.hcl` (after migration)  | `bootstrap.tfstate`      |
-| `global`        | `global`         | `envs/global/global.tfvars`    | `envs/global/backend.hcl`                    | `global.tfstate`         |
-| `data`          | `staging`,`prod` | `envs/<env>/data.tfvars`       | `envs/<env>/backend-data.hcl`                | `<env>/data.tfstate`     |
-| `compute`       | `staging`,`prod` | `envs/<env>/compute.tfvars`    | `envs/<env>/backend-compute.hcl`             | `<env>/compute.tfstate`  |
-| `aca-ephemeral` | `test`,`preview` | `envs/<env>/aca.tfvars`        | `envs/<env>/backend.hcl`                     | `$TF_STATE_KEY` (required) |
+| stack           | envs             | var-file                       | backend file                                | state key                  |
+| --------------- | ---------------- | ------------------------------ | ------------------------------------------- | -------------------------- |
+| `bootstrap`     | `global`         | `envs/global/bootstrap.tfvars` | `envs/global/backend.hcl` (after migration) | `bootstrap.tfstate`        |
+| `global`        | `global`         | `envs/global/global.tfvars`    | `envs/global/backend.hcl`                   | `global.tfstate`           |
+| `data`          | `staging`,`prod` | `envs/<env>/data.tfvars`       | `envs/<env>/backend-data.hcl`               | `<env>/data.tfstate`       |
+| `compute`       | `staging`,`prod` | `envs/<env>/compute.tfvars`    | `envs/<env>/backend-compute.hcl`            | `<env>/compute.tfstate`    |
+| `aca-ephemeral` | `test`,`preview` | `envs/<env>/aca.tfvars`        | `envs/<env>/backend.hcl`                    | `$TF_STATE_KEY` (required) |
 
 - `$TFSTATE_RG` and `$TFSTATE_ACCOUNT` (the GitHub repo variables) override
   the resource group and storage account in the backend file, so CI never
   depends on the placeholder values committed in `backend.hcl`.
+- When set, `$TFSTATE_RG` / `$TFSTATE_ACCOUNT` are also exported as
+  `TF_VAR_tfstate_resource_group` / `TF_VAR_tfstate_account` (unless those are
+  already set), so stacks that use `terraform_remote_state` get the backend
+  coordinates without extra plumbing.
 - `TF_VAR_*` environment variables pass straight through. CI uses them for
   values like `image_tag`.
-- `TF_STATE_KEY` is only read for `aca-ephemeral` and must start with
-  `<env>/` (`test/run-<run_id>-<attempt>.tfstate`, `preview/pr-<n>.tfstate`).
+- `TF_STATE_KEY` is only read for `aca-ephemeral` and must match
+  `<env>/run-<run_id>-<attempt>.tfstate` or `<env>/pr-<n>.tfstate`
+  (e.g. `test/run-123-1.tfstate`, `preview/pr-42.tfstate`). `validate` does
+  not need it (it runs `init -backend=false`).
+- `apply <planfile>` (first extra arg is an existing file, relative to
+  `stacks/<stack>` or absolute) applies the saved plan without `-var-file`;
+  plain `apply` adds the env var-file as usual.
+- `init` runs with `-input=false`, except with `-migrate-state` or
+  `-reconfigure`, where Terraform may need to ask before copying state. Add
+  `-force-copy` to skip that prompt in automation.
 
 ## State model
 
@@ -77,14 +90,47 @@ TF_STATE_KEY=test/run-123-1.tfstate ./scripts/tf.sh aca-ephemeral test plan
   1. Uncomment `backend "azurerm" {}` in `stacks/bootstrap/versions.tf`.
   2. Set `storage_account_name` in `envs/global/backend.hcl` to the
      `tfstate_storage_account` output.
-  3. Run `./scripts/tf.sh bootstrap global init -migrate-state` and answer `yes`.
+  3. Run `./scripts/tf.sh bootstrap global init -migrate-state` and answer `yes`
+     (`tf.sh` drops `-input=false` here so the prompt works).
   4. Delete `stacks/bootstrap/terraform.tfstate*`.
 
   `tf.sh` detects whether the backend block is active and only passes
   `-backend-config` when it is.
-- CI identities have **Storage Blob Data Contributor** on the `tfstate`
-  container. The PR/main plan identity (`gh-bbm-plan`) has **Storage Blob
-  Data Reader** only, so plan jobs must pass `-lock=false`.
+
+- State access is **prefix-scoped with ABAC conditions** on each CI identity's
+  custom tfstate role on the `tfstate` container (blob path attribute, which
+  excludes the container name). Leases (the backend's state lock) are
+  `blobs/write` on the key's own blob, so locking works wherever writes are
+  allowed.
+
+  | identity            | role (on `tfstate`)  | read + write          | read only                                            |
+  | ------------------- | -------------------- | --------------------- | ---------------------------------------------------- |
+  | `gh-bbm-ephemeral`  | `BBM tfstate writer` | `test/*`, `preview/*` | `global.tfstate`                                     |
+  | `gh-bbm-global`     | `BBM tfstate writer` | `global.tfstate`      | —                                                    |
+  | `gh-bbm-staging`    | `BBM tfstate writer` | `staging/*`           | `global.tfstate`                                     |
+  | `gh-bbm-prod`       | `BBM tfstate writer` | `prod/*`              | `global.tfstate`                                     |
+  | `gh-bbm-plan`       | `BBM tfstate reader` | —                     | `global.tfstate`, `staging/*`, `test/*`, `preview/*` |
+  | `gh-bbm-prod-power` | none                 | —                     | —                                                    |
+
+  The two custom roles (defined on `rg-bbm-tfstate-eus2`) carry only
+  `containers/read` as a control-plane action plus blob data actions
+  (writer: `blobs/read`, `write`, `add/action`, `delete`, `move/action`;
+  reader: `blobs/read`). The built-in Storage Blob Data roles are avoided for
+  CI because they also include `containers/write` and `containers/delete`,
+  which the blob-path conditions cannot constrain, so a leaked CI token could
+  delete the whole container.
+
+  `bootstrap.tfstate` is human-only (the applying user and `admin_object_ids`
+  have unconditioned built-in Storage Blob Data Contributor). List Blobs
+  carries no blob path, so every state identity can still list key _names_ in
+  the container, never contents. `gh-bbm-plan` cannot take the lock, so plan
+  jobs must pass `-lock=false`; prod plans run in the `prod` environment as
+  `gh-bbm-prod`.
+
+  Accepted trade-off: `gh-bbm-plan` (PRs and `main`) can read `staging/*`,
+  which contains the Terraform-generated staging secrets (PostgreSQL admin
+  password, `database-url`). Staging holds no real data; `prod/*` is excluded
+  for this reason.
 
 ## Bootstrap order (summary)
 

@@ -11,7 +11,7 @@ locals {
     "contracts-sepolia" = { identity = "gh-bbm-global", reviewers = true, main_only = false }
     "staging"           = { identity = "gh-bbm-staging", reviewers = false, main_only = true }
     "prod"              = { identity = "gh-bbm-prod", reviewers = true, main_only = true }
-    "prod-power"        = { identity = "gh-bbm-prod", reviewers = false, main_only = true }
+    "prod-power"        = { identity = "gh-bbm-prod-power", reviewers = false, main_only = true }
   }
 
   repo_variables = {
@@ -23,14 +23,28 @@ locals {
     ACR_NAME              = module.naming.global.acr
   }
 
+  reviewer_list = [for id in var.github_reviewer_ids : { type = "User", id = id }]
+
+  # Reviewer-gated envs with no github_reviewer_ids omit the `reviewers` key so
+  # re-running the script never wipes reviewers that were added by hand.
+  # Envs that must stay unattended (reviewers = false) always send [].
+  env_reviewers = {
+    for env, cfg in local.github_environments : env => (
+      !cfg.reviewers ? { reviewers = [] } :
+      length(local.reviewer_list) > 0 ? { reviewers = local.reviewer_list } : {}
+    )
+  }
+
   env_payload = {
-    for env, cfg in local.github_environments : env => jsonencode({
-      reviewers = cfg.reviewers ? [for id in var.github_reviewer_ids : { type = "User", id = id }] : []
-      deployment_branch_policy = cfg.main_only ? {
-        protected_branches     = false
-        custom_branch_policies = true
-      } : null
-    })
+    for env, cfg in local.github_environments : env => jsonencode(merge(
+      {
+        deployment_branch_policy = cfg.main_only ? {
+          protected_branches     = false
+          custom_branch_policies = true
+        } : null
+      },
+      local.env_reviewers[env],
+    ))
   }
 
   gh_header_lines = concat(

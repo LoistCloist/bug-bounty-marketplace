@@ -1,0 +1,14 @@
+{
+  "body": {
+    "bountyId": "<bountyId>",
+    "createdAt": "<timestamp>",
+    "deadline": "2030-01-01T00:00:00.000Z",
+    "developerAddress": "0x00000000000000000000000000000000000dEaD1",
+    "filename": "Sample.sol",
+    "id": "<id>",
+    "sourceHash": "d0e70b2f29d09aff0d9b31f6e6b69ec143466a82cf12c8609735f287f83d7649",
+    "sourceReference": "contracts/<id>/d0e70b2f29d09aff0d9b31f6e6b69ec143466a82cf12c8609735f287f83d7649.sol",
+    "status": "Open"
+  },
+  "status": 201
+}

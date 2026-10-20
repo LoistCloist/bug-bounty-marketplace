@@ -1,0 +1,89 @@
+# Prod (AKS aks-bbm-prod-eus2). Layer on top of values.yaml, then
+# values-infra.yaml (terraform compute output), then the image tag:
+#
+#   helm upgrade --install bbm deploy/helm/bbm -n bbm \
+#     -f deploy/helm/bbm/values-prod.yaml -f values-infra.yaml \
+#     --set global.image.tag=sha-xxxxxxx --set global.requireInfraValues=true
+#
+# Registry, client IDs, Key Vault, storage, ingress host/PIP and the
+# Postgres CIDR come from values-infra.yaml; never hardcode them here.
+
+global:
+  # Workloads land on the autoscaled `apps` node pool (system pool stays
+  # for system pods).
+  nodeSelector:
+    bbm.io/pool: apps
+
+config:
+  logLevel: info
+
+secrets:
+  provider: csi
+
+azure:
+  workloadIdentity:
+    enabled: true
+
+web:
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+  pdb:
+    enabled: true
+    minAvailable: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+api:
+  # !!! IMPORTANT: the api MUST stay at exactly 1 replica until the Blob
+  # !!! storage adapter lands. Uploaded sources are written to a per-pod
+  # !!! emptyDir (SOURCE_STORAGE_DIR); with >1 replica, requests routed to
+  # !!! another pod would not find the files. Once uploads go to Blob
+  # !!! storage, raise to minReplicas 2 / maxReplicas 5 and enable the PDB.
+  hpa:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 1
+  pdb:
+    # Only renders when minReplicas > 1, so this is a no-op until then.
+    enabled: true
+    minAvailable: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 768Mi
+
+migrations:
+  enabled: true
+
+ingress:
+  enabled: true
+  className: bbm-nginx
+  # host / publicIpName / publicIpResourceGroup: from values-infra.yaml
+  tls:
+    # Switch to certManager once cert-manager + a ClusterIssuer exist.
+    mode: none
+  appRouting:
+    enabled: true
+    scaling:
+      minReplicas: 2
+      maxReplicas: 3
+
+networkPolicy:
+  enabled: true
+  restrictEgress: true
+  # postgresCidr: from values-infra.yaml
+
+analysis:
+  enabled: false
+sandbox:
+  enabled: false

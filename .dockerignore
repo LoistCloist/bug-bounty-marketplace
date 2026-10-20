@@ -1,0 +1,22 @@
+# Root build context for the Node images (apps/api, apps/web). Contracts and
+# workers/* use their own directories as context and have their own ignores.
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/*.tsbuildinfo
+**/.turbo
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+.ci
+.worktrees
+docs
+uml
+infra
+deploy
+contracts
+workers
+**/*.md
