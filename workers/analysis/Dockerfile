@@ -27,11 +27,17 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
+# Slither compiles with solc. Pre-install every supported version into the
+# venv (solc-select keeps them under $VIRTUAL_ENV/.solc-select), so analysis
+# never downloads a compiler at run time.
+ENV VIRTUAL_ENV=/app/.venv
+RUN xargs -a src/analysis/solc-versions.txt -n1 /app/.venv/bin/solc-select install
+
 # ---- runtime ----
 FROM python:3.12-slim-bookworm AS runtime
 
 LABEL org.opencontainers.image.title="bbm-analysis" \
-      org.opencontainers.image.description="Slither static analysis + advisory LLM explanations worker (skeleton)" \
+      org.opencontainers.image.description="Slither static analysis + advisory LLM explanations worker" \
       org.opencontainers.image.source="https://github.com/LoistCloist/bug-bounty-marketplace" \
       org.opencontainers.image.version="0.1.0"
 

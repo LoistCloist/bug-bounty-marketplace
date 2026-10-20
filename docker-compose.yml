@@ -66,8 +66,23 @@ services:
     image: ${BBM_REGISTRY:-bbm}/analysis:${BBM_TAG:-local}
     build:
       context: workers/analysis
+    # LLM_ENDPOINT / LLM_MODEL / LLM_API_KEY come from workers/analysis/.env
+    # when it exists (git-ignored); without a key, explanations fall back to
+    # Slither's own text. The values below override the file's local paths.
+    env_file:
+      - path: workers/analysis/.env
+        required: false
+    environment:
+      # With these set, the service also polls the jobs table the API writes.
+      DATABASE_URL: postgres://bbm:bbm@db:5432/bbm
+      SOURCE_STORAGE_DIR: /data/sources
     ports:
       - "8000:8000"
+    volumes:
+      - sources:/data/sources:ro
+    depends_on:
+      db:
+        condition: service_healthy
 
   anvil:
     image: ${BBM_REGISTRY:-bbm}/contracts:${BBM_TAG:-local}
