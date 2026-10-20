@@ -48,7 +48,7 @@ class Bounty(BaseModel):
     )
     id: Annotated[str, Field(min_length=1)]
     contractId: Annotated[str, Field(min_length=1)]
-    amount: Annotated[str, Field(pattern="^(0|[1-9]\\d{0,77})$")]
+    amount: Annotated[str, Field(pattern="^[1-9]\\d{0,77}$")]
     currency: Annotated[str, Field(min_length=1)]
     fundedAt: AwareDatetime
     deadline: AwareDatetime

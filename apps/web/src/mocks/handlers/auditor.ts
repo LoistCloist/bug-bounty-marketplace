@@ -56,7 +56,7 @@ export const auditorHandlers = [
   http.post("*/api/auditor/stake", async ({ request }) => {
     const body = (await request.json().catch(() => ({}))) as {
       auditorId?: string;
-      amount?: number;
+      amount?: string;
     };
     if (!body.auditorId || typeof body.amount !== "string") {
       return HttpResponse.json(

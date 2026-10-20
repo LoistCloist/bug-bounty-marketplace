@@ -12,7 +12,7 @@
     },
     "amount": {
       "type": "string",
-      "pattern": "^(0|[1-9]\\d{0,77})$"
+      "pattern": "^[1-9]\\d{0,77}$"
     },
     "currency": {
       "type": "string",

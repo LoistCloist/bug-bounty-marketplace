@@ -35,3 +35,17 @@ describe("compareWei", () => {
     expect(compareWei(big, big)).toBe(0);
   });
 });
+
+describe("uint256 bound", () => {
+  const MAX = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+
+  it("accepts the largest uint256 and rejects one more", () => {
+    expect(WeiSchema.safeParse(MAX).success).toBe(true);
+    expect(WeiSchema.safeParse((BigInt(MAX) + 1n).toString()).success).toBe(false);
+  });
+
+  it("rejects 78-digit values above the uint256 maximum", () => {
+    expect(WeiSchema.safeParse("9".repeat(78)).success).toBe(false);
+    expect(PositiveWeiSchema.safeParse("9".repeat(78)).success).toBe(false);
+  });
+});
