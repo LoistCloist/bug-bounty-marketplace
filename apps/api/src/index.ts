@@ -13,6 +13,7 @@ import { startPayoutKeeper, type PayoutKeeper } from "./chain/payout-keeper.js";
 import { runVerdictsOnce, startVerdictLoop } from "./chain/verdict-loop.js";
 import { startEventIndexer, type EventIndexerHandle } from "./indexer/indexer.js";
 import { PgIndexerLock, PgIndexerRepository, listFindingIds } from "./indexer/pg-repository.js";
+import { claimLockReleaser } from "./indexer/claim-lock-release.js";
 import { PgContractRepository } from "./contracts/pg-repository.js";
 import { PgPipelineRepository } from "./pipeline/pg-repository.js";
 import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
@@ -110,10 +111,8 @@ async function start(): Promise<void> {
       listFindingIds: () => listFindingIds(db),
       lock: new PgIndexerLock(db),
       pollIntervalMs: parseIntEnv(process.env.INDEXER_POLL_MS, 5000),
-      // A resolved dispute (Unfrozen) releases the auditor's claim lock once.
-      onStatusApplied: async (findingId, _status, eventName) => {
-        if (eventName === "Unfrozen") await chainActions.applyDisputeResolved(findingId);
-      },
+      // A payout or a resolved dispute releases the auditor's claim lock once.
+      onStatusApplied: claimLockReleaser(chainActions),
     });
     const pipeline = new PgPipelineRepository(pool);
     verdictLoop = startVerdictLoop({
