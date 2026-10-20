@@ -28,7 +28,29 @@ export interface QueueItem extends Contract {
 }
 
 export function listQueue(sort?: "deadline" | "bounty" | "newest"): QueueItem[] {
-  const open = db.contracts.filter((c) => c.status === "Open");
+  // Re-open abandoned claims, but preserve submissions already in verification.
+  for (const contract of db.contracts.filter((c) => c.status === "Claimed")) {
+    const findings = db.findings.filter((f) => f.contractId === contract.id);
+    const expiresAt =
+      db.claims[contract.id]?.expiresAt ?? findings.find((f) => f.claimExpiresAt)?.claimExpiresAt;
+    if (
+      expiresAt &&
+      new Date(expiresAt).getTime() <= Date.now() &&
+      !findings.some((f) => ["Submitted", "Verified", "Disputed", "Paid"].includes(f.status))
+    ) {
+      contract.status = new Date(contract.deadline).getTime() > Date.now() ? "Open" : "Expired";
+      delete db.claims[contract.id];
+      for (const finding of findings) {
+        finding.claimedByAuditorId = null;
+        finding.claimExpiresAt = null;
+      }
+      for (const auditor of db.auditorProfiles)
+        auditor.claimedContractIds = auditor.claimedContractIds.filter((id) => id !== contract.id);
+    }
+  }
+  const open = db.contracts.filter(
+    (c) => c.status === "Open" && new Date(c.deadline).getTime() > Date.now(),
+  );
   const items: QueueItem[] = open.map((c) => {
     const bounty = db.bounties.find((b) => b.contractId === c.id);
     return { ...c, bounty: { amount: bounty?.amount ?? 0, currency: bounty?.currency ?? "ETH" } };
@@ -44,16 +66,20 @@ export function listQueue(sort?: "deadline" | "bounty" | "newest"): QueueItem[] 
 }
 
 export function claimContract(contractId: string, auditorId: string): Contract {
+  listQueue();
   const contract = findContractById(contractId);
   if (!contract) throw new MockApiError(404, `Contract ${contractId} not found`);
   if (contract.status !== "Open") {
     throw new MockApiError(409, `Contract ${contractId} is not open to claim`);
   }
+  if (new Date(contract.deadline).getTime() <= Date.now())
+    throw new MockApiError(400, "This bounty has expired");
   const auditor = findAuditorById(auditorId);
   if (!auditor) throw new MockApiError(404, `Auditor ${auditorId} not found`);
 
   contract.status = "Claimed";
   const claimExpiresAt = timestamp(CLAIM_WINDOW_MS);
+  db.claims[contractId] = { auditorId, expiresAt: claimExpiresAt };
   for (const finding of db.findings.filter((f) => f.contractId === contractId)) {
     finding.claimedByAuditorId = auditorId;
     finding.claimExpiresAt = claimExpiresAt;
@@ -67,7 +93,8 @@ export function claimContract(contractId: string, auditorId: string): Contract {
 export function postStake(auditorId: string, amount: number): AuditorProfile {
   const auditor = findAuditorById(auditorId);
   if (!auditor) throw new MockApiError(404, `Auditor ${auditorId} not found`);
-  if (amount <= 0) throw new MockApiError(400, "Stake amount must be positive");
+  if (!Number.isFinite(amount) || amount <= 0)
+    throw new MockApiError(400, "Stake amount must be positive");
   auditor.stake += amount;
   return auditor;
 }
@@ -101,9 +128,24 @@ export function submitPoc(
 ): PoCSubmission {
   const finding = findFindingById(findingId);
   if (!finding) throw new MockApiError(404, `Finding ${findingId} not found`);
-  if (finding.status !== "Flagged" && finding.status !== "Submitted") {
+  if (finding.status !== "Flagged") {
     throw new MockApiError(400, `Finding ${findingId} is not awaiting a PoC`);
   }
+  if (
+    finding.claimedByAuditorId !== auditorId ||
+    !finding.claimExpiresAt ||
+    new Date(finding.claimExpiresAt).getTime() <= Date.now()
+  )
+    throw new MockApiError(409, "An active claim is required");
+  if ((findAuditorById(auditorId)?.stake ?? 0) < 10_000)
+    throw new MockApiError(400, "Post the required demo stake before submitting a PoC");
+  const contract = findContractById(finding.contractId);
+  if (
+    !contract ||
+    contract.status !== "Claimed" ||
+    new Date(contract.deadline).getTime() <= Date.now()
+  )
+    throw new MockApiError(400, "This bounty is no longer accepting submissions");
 
   const pocId = nextId("poc");
   const poc: PoCSubmission = {

@@ -1,6 +1,7 @@
 "use client";
 
 import { use } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { developerApi, ApiError } from "@/lib/api";
 import { AnalysisNotice } from "../_components/AnalysisNotice";
@@ -15,11 +16,7 @@ const STATUS_STYLES: Record<string, string> = {
   Expired: "bg-red-500/20 text-red-300 border-red-500/40",
 };
 
-export default function ContractDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default function ContractDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const queryClient = useQueryClient();
 
@@ -57,15 +54,17 @@ export default function ContractDetailPage({
 
   if (contractQuery.isError || !contractQuery.data) {
     const message =
-      contractQuery.error instanceof ApiError
-        ? contractQuery.error.message
-        : "Contract not found.";
+      contractQuery.error instanceof ApiError ? contractQuery.error.message : "Contract not found.";
     return <p className="text-red-400">{message}</p>;
   }
 
   const contract = contractQuery.data;
   const findings = findingsQuery.data ?? [];
-  const canReclaim = new Date(contract.deadline) < new Date();
+  const canReclaim =
+    new Date(contract.deadline) < new Date() &&
+    contract.status !== "Resolved" &&
+    contract.status !== "Expired" &&
+    !findings.some((f) => ["Submitted", "Verified", "Disputed"].includes(f.status));
   const canCancel = contract.status === "Open";
 
   const reclaimError =
@@ -74,7 +73,10 @@ export default function ContractDetailPage({
     cancelMutation.error instanceof ApiError ? cancelMutation.error.message : null;
 
   return (
-    <div className="max-w-3xl">
+    <div>
+      <Link href="/contracts" className="text-xs text-emerald-400 inline-block mb-5">
+        ← Back to contracts
+      </Link>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-white">{contract.filename}</h1>
@@ -108,7 +110,9 @@ export default function ContractDetailPage({
         <button
           type="button"
           disabled={!canReclaim || reclaimMutation.isPending}
-          onClick={() => reclaimMutation.mutate()}
+          onClick={() => {
+            if (window.confirm("Reclaim this expired demo bounty?")) reclaimMutation.mutate();
+          }}
           title={canReclaim ? undefined : "Only available after the deadline passes"}
           className="rounded-md border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -119,7 +123,10 @@ export default function ContractDetailPage({
           <button
             type="button"
             disabled={cancelMutation.isPending}
-            onClick={() => cancelMutation.mutate()}
+            onClick={() => {
+              if (window.confirm("Cancel this contract and close its demo bounty?"))
+                cancelMutation.mutate();
+            }}
             className="rounded-md border border-red-500/50 px-3 py-1.5 text-sm font-medium text-red-300 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {cancelMutation.isPending ? "Cancelling..." : "Cancel contract"}
@@ -130,8 +137,18 @@ export default function ContractDetailPage({
       {cancelError && <p className="mt-2 text-sm text-red-400">{cancelError}</p>}
 
       <h2 className="mt-10 text-lg font-semibold text-white">Findings</h2>
-      {findings.length === 0 ? (
-        <AnalysisNotice status={analysisQuery.data} />
+      {findingsQuery.isError ? (
+        <p role="alert" className="text-red-400 mt-3">
+          Could not load findings. Retrying automatically.
+        </p>
+      ) : findings.length === 0 ? (
+        contract.status === "Expired" ? (
+          <p className="mt-3 text-sm text-slate-400">
+            This contract is closed. No findings are available.
+          </p>
+        ) : (
+          <AnalysisNotice status={analysisQuery.data} />
+        )
       ) : (
         <div className="mt-4 space-y-4">
           {findings.map((finding) => (

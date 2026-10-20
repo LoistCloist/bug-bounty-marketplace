@@ -102,3 +102,52 @@ describe("auditor queue + claim", () => {
     expect(await auditorApi.listQueue()).toHaveLength(0);
   });
 });
+
+describe("claim during analysis", () => {
+  it("assigns later findings to the auditor who claimed before analysis completed", async () => {
+    const contract = await developerApi.submitContract({
+      file: new File(["contract Demo {}"], "Demo.sol"),
+      developerAddress: SEED_DEVELOPER_ADDRESS,
+      bountyAmount: 1,
+      deadline: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    await auditorApi.claimContract({ contractId: contract.id, auditorId: SEED_AUDITOR_ID });
+    await vi.advanceTimersByTimeAsync(3000);
+    const findings = await developerApi.listFindings(contract.id);
+    expect(findings).toHaveLength(2);
+    expect(
+      findings.every((f) => f.claimedByAuditorId === SEED_AUDITOR_ID && !!f.claimExpiresAt),
+    ).toBe(true);
+  });
+  it("completes analysis for the seeded open contract", async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await developerApi.listFindings("contract_1")).toHaveLength(2);
+  });
+});
+
+describe("complete demo bounty lifecycle", () => {
+  it("accepts a staked PoC, verifies it, and pays after the challenge window", async () => {
+    await auditorApi.postStake({ auditorId: SEED_AUDITOR_ID, amount: 5000 });
+    const finding = (await developerApi.listFindings("contract_2"))[0]!;
+    await auditorApi.submitPoc({
+      findingId: finding.id,
+      auditorId: SEED_AUDITOR_ID,
+      file: new File(["contract Proof {}"], "Proof.t.sol"),
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((await developerApi.listFindings("contract_2"))[0]?.status).toBe("Verified");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect((await developerApi.listFindings("contract_2"))[0]?.status).toBe("Paid");
+    expect((await developerApi.getContract("contract_2")).status).toBe("Resolved");
+  });
+  it("does not allow a PoC without the required stake", async () => {
+    const finding = (await developerApi.listFindings("contract_2"))[0]!;
+    await expect(
+      auditorApi.submitPoc({
+        findingId: finding.id,
+        auditorId: SEED_AUDITOR_ID,
+        file: new File(["contract Proof {}"], "Proof.t.sol"),
+      }),
+    ).rejects.toThrow(/stake/);
+  });
+});

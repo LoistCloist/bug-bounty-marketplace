@@ -1,5 +1,6 @@
 import { setupWorker } from "msw/browser";
 import { handlers } from "./handlers";
+import "./db";
 
 /** Browser MSW worker. Started conditionally (see src/app/providers.tsx)
  * when NEXT_PUBLIC_API_MOCKING=enabled. */

@@ -1,6 +1,7 @@
 "use client";
 
 import { ROLES, useRoleStore, type Role } from "@/lib/role/store";
+import { useRouter } from "next/navigation";
 
 const LABELS: Record<Role, string> = {
   developer: "Developer",
@@ -9,6 +10,7 @@ const LABELS: Record<Role, string> = {
 };
 
 export function RoleSwitcher() {
+  const router = useRouter();
   const role = useRoleStore((s) => s.role);
   const setRole = useRoleStore((s) => s.setRole);
 
@@ -18,7 +20,10 @@ export function RoleSwitcher() {
         <button
           key={r}
           type="button"
-          onClick={() => setRole(r)}
+          onClick={() => {
+            setRole(r);
+            router.push(r === "developer" ? "/contracts" : `/${r}`);
+          }}
           aria-pressed={role === r}
           className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
             role === r
