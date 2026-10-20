@@ -82,19 +82,23 @@ describeRepositories(
         return result.rows;
       },
       close: async () => {
-        await db.query(
+        const client = await db.connect();
+        await client.query("BEGIN");
+        await client.query(
           `DELETE FROM jobs WHERE subject_id = ANY($1)
               OR subject_id IN (SELECT p.id FROM poc_submissions p JOIN findings f ON f.id = p.finding_id
                                  WHERE f.contract_id = ANY($1))`,
           [created],
         );
-        await db.query(
+        await client.query(
           "DELETE FROM poc_submissions WHERE finding_id IN (SELECT id FROM findings WHERE contract_id = ANY($1))",
           [created],
         );
-        await db.query("DELETE FROM findings WHERE contract_id = ANY($1)", [created]);
-        await db.query("DELETE FROM contracts WHERE id = ANY($1)", [created]);
-        await db.query("DELETE FROM bounties WHERE contract_id = ANY($1)", [created]);
+        await client.query("DELETE FROM findings WHERE contract_id = ANY($1)", [created]);
+        await client.query("DELETE FROM contracts WHERE id = ANY($1)", [created]);
+        await client.query("DELETE FROM bounties WHERE contract_id = ANY($1)", [created]);
+        await client.query("COMMIT");
+        client.release();
       },
     };
   },
