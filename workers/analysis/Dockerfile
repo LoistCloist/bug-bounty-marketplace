@@ -50,6 +50,10 @@ RUN groupadd --system --gid 10001 app \
 
 WORKDIR /app
 COPY --from=builder --chown=10001:10001 /app/.venv /app/.venv
+# Docker CLI only, for sandbox jobs (SANDBOX_ENABLED=true): PoCs run in
+# throwaway bbm-sandbox containers on the Docker socket that
+# docker-compose.sandbox.yml mounts. Unused otherwise.
+COPY --from=docker:27.5.1-cli /usr/local/bin/docker /usr/local/bin/docker
 
 USER 10001
 EXPOSE 8000

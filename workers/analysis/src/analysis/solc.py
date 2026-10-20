@@ -27,6 +27,28 @@ def _pragma_spec(source: bytes) -> str | None:
     return " ".join(match.group(1).split()) if match else None
 
 
+def pick_solc_for_all(sources: Sequence[bytes], supported: Sequence[str]) -> str:
+    """The highest supported version that satisfies every source's pragma
+    (e.g. a contract and the PoC that imports it). Sources without a pragma
+    accept any version."""
+    versions = sorted(semantic_version.Version(v) for v in supported)
+    texts = [t for t in (_pragma_spec(s) for s in sources) if t is not None]
+    candidates = versions
+    for text in texts:
+        try:
+            spec = semantic_version.NpmSpec(_OPERATOR_SPACE.sub(r"\1", text))
+        except ValueError as err:
+            raise UnsupportedSolcError(f"Unsupported Solidity version: {text}") from err
+        candidates = [v for v in candidates if v in spec]
+    if not candidates:
+        if len(texts) == 1:
+            raise UnsupportedSolcError(f"Unsupported Solidity version: {texts[0]}")
+        raise UnsupportedSolcError(
+            f"No supported Solidity version satisfies all of: {', '.join(texts)}"
+        )
+    return str(candidates[-1])
+
+
 def pick_solc(source: bytes, supported: Sequence[str]) -> str:
     """Returns the highest supported version that satisfies the source's pragma.
 

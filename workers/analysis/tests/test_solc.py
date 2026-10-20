@@ -67,3 +67,20 @@ def test_block_comment_opener_inside_a_line_comment_does_not_hide_the_pragma():
 def test_line_comment_marker_inside_a_block_comment_is_ignored():
     source = b"/* see http://example.com */\npragma solidity 0.8.20;"
     assert pick_solc(source, S) == "0.8.20"
+
+
+def test_pick_solc_for_all_satisfies_every_pragma():
+    from analysis.solc import pick_solc_for_all
+
+    target = b"pragma solidity ^0.8.19;"
+    poc = b"pragma solidity 0.8.20;"
+    assert pick_solc_for_all([target, poc], S) == "0.8.20"
+    assert pick_solc_for_all([target, b"contract T {}"], S) == "0.8.28"
+
+
+def test_pick_solc_for_all_names_both_pragmas_when_none_fits():
+    from analysis.solc import pick_solc_for_all
+
+    with pytest.raises(UnsupportedSolcError) as exc:
+        pick_solc_for_all([b"pragma solidity ^0.8.19;", b"pragma solidity ^0.7.0;"], S)
+    assert str(exc.value) == "No supported Solidity version satisfies all of: ^0.8.19, ^0.7.0"
