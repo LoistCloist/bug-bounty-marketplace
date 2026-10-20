@@ -122,6 +122,13 @@ NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled \
 PoCs are Foundry tests that import the target as `import "../src/<filename>";`
 (see [workers/sandbox](workers/sandbox/README.md)).
 
+In live mode only the pipeline routes are real: upload, contract pages,
+findings, analysis status, the auditor queue, claim and PoC upload. Stake,
+the auditor profile, disputes, false-positive marking, reclaim/cancel and the
+arbiter stay mocked, so those buttons answer "not found" for real contracts
+and the profile's claimed list shows only seeded contracts; keep the demo to
+the pipeline steps.
+
 ## Testing
 
 | Tier               | Where                                                       | Command                                           |

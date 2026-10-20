@@ -25,24 +25,27 @@ wait_for() {
   return 1
 }
 
+for tool in curl jq; do
+  command -v "$tool" >/dev/null || die "$tool is required"
+done
 curl -sf "$API/health" >/dev/null || die "API not reachable at $API"
 
 step "Submitting Vault.sol (a deliberately re-entrant vault)"
 RESPONSE=$(curl -s -F "file=@$FIXTURES/Vault.sol" -F "developerAddress=$DEVELOPER" \
   -F bountyAmount=1 -F currency=ETH -F deadline=2030-01-01T00:00:00.000Z \
   "$API/api/contracts")
-CONTRACT=$(echo "$RESPONSE" | jq -r '.id // empty')
+CONTRACT=$(echo "$RESPONSE" | jq -r '.id // empty' 2>/dev/null) || die "upload returned non-JSON: $RESPONSE"
 [[ -n $CONTRACT ]] || die "upload rejected: $RESPONSE"
 echo "contract: $CONTRACT"
 
 step "Waiting for Slither + LLM analysis"
 analysis_finished() {
-  STATUS=$(curl -sf "$API/api/contracts/$CONTRACT/analysis" | jq -r .status)
+  STATUS=$(curl -sf "$API/api/contracts/$CONTRACT/analysis" | jq -r .status) || return 1
   [[ $STATUS == Done || $STATUS == Failed ]]
 }
 wait_for 180 analysis_finished || die "analysis did not finish in 180s"
 [[ $STATUS == Done ]] || die "analysis failed: $(curl -sf "$API/api/contracts/$CONTRACT/analysis" | jq -r .error)"
-FINDINGS=$(curl -sf "$API/api/contracts/$CONTRACT/findings")
+FINDINGS=$(curl -sf "$API/api/contracts/$CONTRACT/findings") || die "could not load findings"
 echo "$FINDINGS" | jq -r '.[] | "\(.severity)\t\(.slitherDetector)\t\(.llmExplanation | gsub("\\s+"; " ") | .[0:100])"'
 
 REENTRANCY=$(echo "$FINDINGS" | jq -r '[.[] | select(.slitherDetector == "reentrancy-eth")][0].id')

@@ -117,7 +117,7 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
               rel="noreferrer"
               className="mt-2 block text-xs text-emerald-400 underline hover:text-emerald-300"
             >
-              Open raw Slither JSON
+              Open raw Slither JSON<span className="sr-only"> (opens in a new tab)</span>
             </a>
           ) : (
             <div>

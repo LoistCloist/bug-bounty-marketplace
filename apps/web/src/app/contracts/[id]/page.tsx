@@ -35,7 +35,12 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
   const analysisQuery = useQuery({
     queryKey: ["analysis", id],
     queryFn: () => developerApi.getAnalysisStatus(id),
-    refetchInterval: POLL_INTERVAL_MS,
+    // Stop polling once the analysis has finished either way.
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "Done" || status === "Failed" ? false : POLL_INTERVAL_MS;
+    },
+    retry: false,
   });
 
   const reclaimMutation = useMutation({
@@ -147,7 +152,7 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
             This contract is closed. No findings are available.
           </p>
         ) : (
-          <AnalysisNotice status={analysisQuery.data} />
+          <AnalysisNotice status={analysisQuery.data} unavailable={analysisQuery.isError} />
         )
       ) : (
         <div className="mt-4 space-y-4">

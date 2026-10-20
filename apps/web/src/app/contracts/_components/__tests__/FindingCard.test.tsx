@@ -93,7 +93,7 @@ describe("FindingCard", () => {
       challengeWindowExpiresAt: null,
     });
     fireEvent.click(screen.getByText("Show raw Slither output"));
-    const link = screen.getByRole("link", { name: /raw Slither JSON/ });
+    const link = screen.getByRole("link", { name: /raw Slither JSON.*opens in a new tab/ });
     expect(link.getAttribute("href")).toBe("/api/findings/f1/raw");
   });
 });
