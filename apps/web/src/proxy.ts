@@ -11,13 +11,27 @@ import { buildProxyTarget } from "@/lib/proxy-target";
  * `NextResponse.rewrite` to an external origin forwards method, headers and
  * the (buffered) request body, so multipart `.sol` uploads go through
  * intact. Next buffers proxied bodies up to `proxyClientMaxBodySize`
- * (10 MB default), well above the API's 100 KB upload limit. */
+ * (10 MB default), well above the API's 100 KB upload limit.
+ *
+ * A malformed `API_INTERNAL_URL` answers 500 `{ error: "proxy misconfigured" }`
+ * and logs the reason once per process. */
+let loggedMisconfiguration = false;
+
 export function proxy(request: NextRequest) {
-  const target = buildProxyTarget(
-    process.env.API_INTERNAL_URL,
-    request.nextUrl.pathname,
-    request.nextUrl.search,
-  );
+  let target: string | null;
+  try {
+    target = buildProxyTarget(
+      process.env.API_INTERNAL_URL,
+      request.nextUrl.pathname,
+      request.nextUrl.search,
+    );
+  } catch (err) {
+    if (!loggedMisconfiguration) {
+      loggedMisconfiguration = true;
+      console.error(err);
+    }
+    return NextResponse.json({ error: "proxy misconfigured" }, { status: 500 });
+  }
   if (!target) return NextResponse.next();
   return NextResponse.rewrite(target);
 }

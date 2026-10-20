@@ -43,4 +43,21 @@ describe("buildProxyTarget", () => {
       "http://api:3001/api/findings",
     );
   });
+
+  it("throws on an upstream that is not an absolute http(s) URL", () => {
+    for (const bad of ["api:3001", "127.0.0.1:3993", "/backend", "ftp://api:3001"]) {
+      expect(() => buildProxyTarget(bad, "/api/contracts", "")).toThrow(
+        /API_INTERNAL_URL must be an absolute http\(s\) URL/,
+      );
+    }
+  });
+
+  it("accepts https and IP upstreams", () => {
+    expect(buildProxyTarget("http://127.0.0.1:3993", "/api/a", "")).toBe(
+      "http://127.0.0.1:3993/api/a",
+    );
+    expect(buildProxyTarget("https://api.example.com", "/api/a", "")).toBe(
+      "https://api.example.com/api/a",
+    );
+  });
 });
