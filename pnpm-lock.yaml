@@ -150,6 +150,25 @@ importers:
         specifier: ^3.0.5
         version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.4)(jiti@2.7.0)(jsdom@30.1.1)(lightningcss@1.32.0)(msw@2.15.0(@types/node@22.20.4)(typescript@5.9.3))(tsx@4.23.15)
 
+  tests:
+    dependencies:
+      '@bbm/shared':
+        specifier: workspace:^
+        version: link:../packages/shared
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.20.4
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.4)(jiti@2.7.0)(jsdom@30.1.1)(lightningcss@1.32.0)(msw@2.15.0(@types/node@22.20.4)(typescript@5.9.3))(tsx@4.23.15)
+
 packages:
 
   '@adobe/css-tools@4.5.0':

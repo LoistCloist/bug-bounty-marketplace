@@ -1,0 +1,22 @@
+{
+  "name": "@bbm/system-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test:integration": "vitest run --project integration",
+    "test:regression": "vitest run --project regression",
+    "test:smoke": "vitest run --project smoke"
+  },
+  "dependencies": {
+    "@bbm/shared": "workspace:^",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.5"
+  }
+}
