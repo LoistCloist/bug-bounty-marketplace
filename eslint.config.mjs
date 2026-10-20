@@ -17,6 +17,8 @@ export default tseslint.config(
       "**/cache/**",
       "contracts/**",
       "workers/**",
+      "tests/e2e/playwright-report/**",
+      "tests/e2e/test-results/**",
     ],
   },
   {

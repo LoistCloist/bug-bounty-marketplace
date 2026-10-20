@@ -26,6 +26,11 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       shared: ${{ steps.filter.outputs.shared }}
       contracts: ${{ steps.filter.outputs.contracts }}
+      analysis: ${{ steps.filter.outputs.analysis }}
+      containers: ${{ steps.filter.outputs.containers }}
+      infra: ${{ steps.filter.outputs.infra }}
+      helm: ${{ steps.filter.outputs.helm }}
+      workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,6 +79,41 @@ jobs:
             # root JS/TS tooling config.
             contracts:
               - 'contracts/**'
+
+            # Python worker; also re-run when the shared JSON Schemas change,
+            # since its pydantic models are generated from them.
+            analysis:
+              - 'workers/analysis/**'
+              - 'packages/shared/schema/**'
+              - '.github/workflows/ci.yml'
+
+            # Anything that can change a container image or the compose
+            # stack. The containers job builds every image and boots the
+            # full stack, so it fans out from all component sources.
+            containers:
+              - 'tests/**'
+              - '**/Dockerfile'
+              - '**/.dockerignore'
+              - 'docker-compose*.yml'
+              - 'apps/**'
+              - 'packages/shared/**'
+              - 'workers/**'
+              - 'contracts/**'
+
+            # Terraform (separate toolchain, no JS deps): static checks only,
+            # never touches Azure.
+            infra:
+              - 'infra/terraform/**'
+              - '.github/workflows/ci.yml'
+
+            # Helm chart: lint + render + schema validation, no cluster.
+            helm:
+              - 'deploy/helm/**'
+              - '.github/workflows/ci.yml'
+
+            # Workflow files themselves (actionlint).
+            workflows:
+              - '.github/**'
 
   # ---------------------------------------------------------------------
   # apps/web - placeholder package today, becomes the real Next.js app
@@ -160,13 +200,32 @@ jobs:
   # ---------------------------------------------------------------------
   # apps/api - real Fastify app with real lint/typecheck/test/build
   # scripts already. Run them directly (no --if-present) so this job
-  # fails loudly if one of those scripts ever disappears.
+  # fails loudly if one of those scripts ever disappears. A Postgres
+  # service container backs the PgContractRepository tests (they skip
+  # without DATABASE_URL) and the boot check of the built bundle.
   # ---------------------------------------------------------------------
   api:
     name: api
     needs: changes
+    timeout-minutes: 20
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.root == 'true'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bbm
+          POSTGRES_PASSWORD: bbm
+          POSTGRES_DB: bbm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bbm -d bbm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://bbm:bbm@localhost:5432/bbm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -195,6 +254,35 @@ jobs:
       - name: Build
         run: pnpm --filter @bbm/api run build
 
+      # Catches bundle and migration-copy regressions: the esbuild output
+      # must start on its own, find and run dist/migrations against Postgres
+      # (already migrated by the tests, so this checks the copy, not the SQL)
+      # and answer /health.
+      - name: Boot built API
+        env:
+          PORT: '3001'
+        run: |
+          set -euo pipefail
+          ls apps/api/dist/migrations/*.sql
+          log="$RUNNER_TEMP/api.log"
+          node apps/api/dist/index.js > "$log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; cat "$log"' EXIT
+          for _ in $(seq 1 20); do
+            if curl -fs --max-time 2 "localhost:$PORT/health"; then
+              echo
+              grep 'applied migrations' "$log"
+              exit 0
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "::error::API exited before becoming healthy"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "::error::API did not answer /health within 20s"
+          exit 1
+
   # ---------------------------------------------------------------------
   # contracts - Foundry project. forge-std is a git submodule at
   # contracts/lib/forge-std, so checkout fetches it (same as a contributor
@@ -214,6 +302,10 @@ jobs:
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pinned: gas snapshots differ across forge versions. Keep in sync
+          # with contracts/Dockerfile.
+          version: v1.3.5
 
       - name: Forge build
         working-directory: contracts
@@ -222,6 +314,16 @@ jobs:
       - name: Forge test
         working-directory: contracts
         run: forge test -vvv
+
+      # Regression: fail when gas usage changes without the committed
+      # snapshot being updated (`forge snapshot` and commit the result).
+      - name: Gas snapshot check
+        working-directory: contracts
+        run: forge snapshot --check
+
+      - name: Deploy script dry run
+        working-directory: contracts
+        run: forge script script/Deploy.s.sol
 
       - name: Slither static analysis
         uses: crytic/slither-action@v0.4.0
@@ -233,6 +335,334 @@ jobs:
           fail-on: none
 
   # ---------------------------------------------------------------------
+  # workers/analysis - Python (uv) worker. Unit tests run with sockets
+  # disabled (pytest-socket), and the pydantic models generated from
+  # packages/shared/schema must be up to date.
+  # ---------------------------------------------------------------------
+  analysis:
+    name: analysis
+    needs: changes
+    if: needs.changes.outputs.analysis == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/analysis
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: workers/analysis/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+
+      - name: Test (pytest)
+        run: uv run pytest -q
+
+      - name: Fail if generated models are out of date
+        run: |
+          uv run scripts/gen-types.sh
+          git diff --exit-code -- src/analysis/generated
+
+  # ---------------------------------------------------------------------
+  # containers - lint every Dockerfile, build every image (BuildKit, GHA
+  # layer cache, never pushed), then boot the full compose stack and
+  # smoke-test it: health endpoints, a contract upload through the web
+  # proxy into the real API + Postgres, and a contract deploy to anvil.
+  # ---------------------------------------------------------------------
+  containers:
+    name: containers
+    needs: changes
+    if: needs.changes.outputs.containers == 'true' || needs.changes.outputs.root == 'true'
+    runs-on: ubuntu-latest
+    env:
+      BBM_TAG: ci
+      COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Lint Dockerfiles (hadolint)
+        run: |
+          for f in apps/api/Dockerfile apps/web/Dockerfile workers/analysis/Dockerfile contracts/Dockerfile; do
+            echo "::group::$f"
+            docker run --rm -i hadolint/hadolint:v2.12.0 < "$f"
+            echo "::endgroup::"
+          done
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build images
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: docker-compose.yml
+          targets: api,web,analysis,anvil
+          load: true
+          set: |
+            api.cache-from=type=gha,scope=api
+            api.cache-to=type=gha,mode=max,scope=api
+            web.cache-from=type=gha,scope=web
+            web.cache-to=type=gha,mode=max,scope=web
+            analysis.cache-from=type=gha,scope=analysis
+            analysis.cache-to=type=gha,mode=max,scope=analysis
+            anvil.cache-from=type=gha,scope=contracts
+            anvil.cache-to=type=gha,mode=max,scope=contracts
+
+      - name: Images run as non-root
+        run: |
+          for svc in api web analysis contracts; do
+            uid=$(docker run --rm --entrypoint id "bbm/$svc:ci" -u)
+            echo "$svc uid=$uid"
+            test "$uid" != "0"
+          done
+
+      - name: Start stack
+        run: $COMPOSE up -d --wait --wait-timeout 180 --no-build db api web analysis anvil
+
+      - name: Deploy contracts to anvil
+        run: |
+          mkdir -p .ci/deployments && chmod 777 .ci/deployments
+          $COMPOSE run --rm contracts-deploy
+          cat .ci/deployments/31337.json
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          curl -fsS localhost:3001/health
+          curl -fsS localhost:3000/healthz
+          curl -fsS localhost:8000/health
+          curl -fsS -o /dev/null localhost:3000/
+          printf 'pragma solidity ^0.8.19;\ncontract Smoke {}\n' > /tmp/Smoke.sol
+          # Upload through the web proxy -> api -> Postgres, then read it back.
+          id=$(curl -fsS -F file=@/tmp/Smoke.sol \
+            -F developerAddress=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+            -F bountyAmount=1000000000000000000 -F currency=ETH \
+            -F deadline=2030-01-01T00:00:00.000Z \
+            localhost:3000/api/contracts | jq -r .id)
+          echo "created contract $id"
+          curl -fsS "localhost:3000/api/contracts/$id" | jq -e --arg id "$id" '.id == $id'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # System test tiers against the running stack (see tests/README.md).
+      # BBM_* URLs default to the compose ports; deployments JSON comes from
+      # the contracts-deploy step above.
+      - name: Lint and typecheck system tests
+        run: |
+          pnpm --filter @bbm/system-tests run lint
+          pnpm --filter @bbm/system-tests run typecheck
+
+      - name: Integration tests
+        run: pnpm --filter @bbm/system-tests run test:integration
+
+      - name: Regression tests (API goldens)
+        run: pnpm --filter @bbm/system-tests run test:regression
+
+      - name: Smoke tests
+        env:
+          BBM_SMOKE_WRITE: '1'
+        run: pnpm --filter @bbm/system-tests run test:smoke
+
+      - name: Install Playwright browser
+        run: pnpm --filter @bbm/system-tests exec playwright install --with-deps chromium
+
+      - name: E2E tests (Playwright)
+        run: pnpm --filter @bbm/system-tests run e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: tests/e2e/playwright-report/
+          if-no-files-found: ignore
+
+      - name: Dump logs on failure
+        if: failure()
+        run: $COMPOSE logs --no-color > compose.log
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: compose.log
+
+      - name: Stop stack
+        if: always()
+        run: $COMPOSE --profile deploy down -v
+
+  # ---------------------------------------------------------------------
+  # infra/terraform - static checks only (no Azure credentials, no
+  # backend): fmt, init -backend=false + validate in every stack/module,
+  # terraform test (mock providers) wherever a tests/ dir exists, TFLint
+  # with the shared config, shellcheck. The loop lives in
+  # scripts/ci-static.sh so it runs the same locally; new stacks and
+  # modules are picked up automatically.
+  # ---------------------------------------------------------------------
+  terraform-static:
+    name: terraform-static
+    needs: changes
+    timeout-minutes: 20
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
+      # Modules have no committed lock file; let them reuse cached providers
+      # anyway (ci-static.sh discards their temporary lock files).
+      TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE: 'true'
+      TF_IN_AUTOMATION: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.53.0
+
+      - name: Cache Terraform providers and TFLint plugins
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.terraform-plugin-cache
+            ~/.tflint.d/plugins
+          key: tf-${{ runner.os }}-${{ hashFiles('infra/terraform/**/.terraform.lock.hcl', 'infra/terraform/.tflint.hcl') }}
+          restore-keys: |
+            tf-${{ runner.os }}-
+
+      - name: Terraform static checks
+        env:
+          # tflint --init downloads the azurerm ruleset from GitHub releases;
+          # an authenticated request avoids the anonymous rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: infra/terraform/scripts/ci-static.sh
+
+  # ---------------------------------------------------------------------
+  # deploy/helm - lint every values layer, render staging/prod/ci with
+  # every optional component on and schema-validate the output
+  # (kubeconform: core schemas + datreeio CRD catalog + the vendored
+  # NginxIngressController schema, which that catalog lacks), assert that
+  # rendering without global.image.tag fails, then chart-testing lint.
+  # No cluster is involved.
+  # ---------------------------------------------------------------------
+  helm:
+    name: helm
+    needs: changes
+    timeout-minutes: 20
+    if: needs.changes.outputs.helm == 'true'
+    runs-on: ubuntu-latest
+    env:
+      CHART: deploy/helm/bbm
+      KUBECONFORM_VERSION: v0.6.7
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # ct compares against target-branch (main).
+          fetch-depth: 0
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" |
+            tar -xz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: Helm lint (every values layer)
+        run: |
+          set -euo pipefail
+          for f in values.yaml values-staging.yaml values-prod.yaml values-ci.yaml; do
+            echo "::group::helm lint $f"
+            helm lint --strict "$CHART" -f "$CHART/$f" --set global.image.tag=ci
+            echo "::endgroup::"
+          done
+
+      - name: Render and validate manifests (kubeconform)
+        run: |
+          set -euo pipefail
+          for f in values-staging.yaml values-prod.yaml values-ci.yaml; do
+            echo "::group::helm template $f | kubeconform"
+            helm template bbm "$CHART" -n bbm -f "$CHART/$f" --set global.image.tag=ci \
+              --set analysis.enabled=true --set sandbox.enabled=true --set migrations.enabled=true |
+              kubeconform -strict -summary -kubernetes-version 1.31.0 \
+                -schema-location default \
+                -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+                -schema-location 'deploy/helm/kubeconform-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+            echo "::endgroup::"
+          done
+
+      - name: Rendering without global.image.tag must fail
+        run: |
+          if out=$(helm template bbm "$CHART" -n bbm 2>&1); then
+            echo "::error::helm template succeeded without global.image.tag"
+            exit 1
+          fi
+          echo "$out" | grep -q 'global.image.tag' || {
+            echo "::error::helm template failed for an unexpected reason:"
+            echo "$out"
+            exit 1
+          }
+          echo "OK: rendering without global.image.tag fails as expected"
+
+      - name: Setup chart-testing
+        uses: helm/chart-testing-action@v2
+
+      - name: Chart-testing lint
+        run: ct lint --config deploy/helm/ct.yaml --charts deploy/helm/bbm
+
+  # ---------------------------------------------------------------------
+  # .github - lint workflow files with actionlint (includes shellcheck of
+  # every `run:` block).
+  # ---------------------------------------------------------------------
+  workflows:
+    name: workflows
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.3 -color
+
+  # ---------------------------------------------------------------------
   # Single required status check for branch protection: succeeds as
   # long as every needed job either succeeded or was skipped (because
   # its path filter didn't match), and fails if any of them actually
@@ -241,7 +671,17 @@ jobs:
   ci-ok:
     name: CI OK
     if: always()
-    needs: [changes, web, shared, api, contracts]
+    needs:
+      - changes
+      - web
+      - shared
+      - api
+      - contracts
+      - analysis
+      - containers
+      - terraform-static
+      - helm
+      - workflows
     runs-on: ubuntu-latest
     steps:
       - name: Check required job results
@@ -256,6 +696,11 @@ jobs:
             [shared]="${{ needs.shared.result }}"
             [api]="${{ needs.api.result }}"
             [contracts]="${{ needs.contracts.result }}"
+            [analysis]="${{ needs.analysis.result }}"
+            [containers]="${{ needs.containers.result }}"
+            [terraform-static]="${{ needs.terraform-static.result }}"
+            [helm]="${{ needs.helm.result }}"
+            [workflows]="${{ needs.workflows.result }}"
           )
           failed=0
           for job in "${!results[@]}"; do

@@ -1,0 +1,457 @@
+name: Env power
+
+# On-demand power for the AKS environments (staging, prod). See
+# docs/devops/env-lifecycle.md for the state machine, costs and timings.
+#
+#   status   read-only snapshot (plan identity, no approval)
+#   pause    az aks stop (+ Postgres stop)                 ~2-5 min
+#   resume   Postgres start + az aks start + smoke         ~5-15 min
+#   down     terraform destroy of the compute stack only   (confirm = env name)
+#   up       terraform apply of compute + redeploy of the last deployed tag
+#
+# Approvals: prod `pause` runs in `prod-power` (no reviewer, power-only identity);
+# every other prod action runs in `prod` (1 reviewer). Staging needs none.
+#
+# Schedules (UTC, default branch):
+#   06:00 daily     auto-pause any running env unless its data RG has auto-pause=false
+#   06:30 daily     stop Postgres again if Azure auto-started it (7-day limit) while paused/down
+#   11:00 Sunday    retry auto-pause after the AKS maintenance window (Sun 06:00-10:00),
+#                   which can block a stop
+#
+# Every manual mutating job uses the concurrency group env-<env>, shared with
+# deploy.yml. The scheduled jobs use env-power-scheduled-<env> instead, so a
+# prod run parked on an unanswered `prod` approval (holding env-prod) cannot
+# block the nightly pause. env-power.sh refuses to stop a cluster whose
+# provisioningState is not Succeeded, so it never stops one mid-apply.
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Environment
+        type: choice
+        options: [staging, prod]
+        required: true
+      action:
+        description: What to do
+        type: choice
+        options: [status, pause, resume, down, up]
+        default: status
+      include_db:
+        description: Also stop Postgres on pause/down (resume/up always start it)
+        type: boolean
+        default: true
+      confirm:
+        description: For `down` only - type the env name to confirm
+        type: string
+        default: ''
+  schedule:
+    - cron: '0 6 * * *'
+    - cron: '30 6 * * *'
+    - cron: '0 11 * * 0'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TFSTATE_RG: ${{ vars.TFSTATE_RG }}
+  TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
+  TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  # ---------------------------------------------------------------------
+  # status: read-only, no environment. The plan identity has subscription
+  # Reader, which covers AKS/Postgres/RG/public-IP reads.
+  # ---------------------------------------------------------------------
+  status:
+    name: status (${{ inputs.env }})
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.action == 'status' &&
+      vars.AZURE_PLAN_CLIENT_ID != '' && vars.AZURE_SUBSCRIPTION_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (plan identity, read-only)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Status
+        env:
+          ENV_NAME: ${{ inputs.env }}
+        run: infra/terraform/scripts/env-power.sh "$ENV_NAME" status
+
+  # ---------------------------------------------------------------------
+  # pause / resume. prod pause uses the reviewer-free prod-power env
+  # (identity can only start/stop/tag); prod resume needs the prod reviewer.
+  # ---------------------------------------------------------------------
+  power:
+    name: ${{ inputs.action }} (${{ inputs.env }})
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.action == 'pause' || inputs.action == 'resume') &&
+      vars.AZURE_SUBSCRIPTION_ID != ''
+    runs-on: ubuntu-latest
+    environment: ${{ (inputs.env == 'prod' && inputs.action == 'pause') && 'prod-power' || inputs.env }}
+    concurrency:
+      group: env-${{ inputs.env }}
+      cancel-in-progress: false
+    timeout-minutes: 60
+    steps:
+      - name: Check configuration
+        env:
+          CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+        run: |
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "::error::This GitHub Environment has no AZURE_CLIENT_ID variable. Run the bootstrap gh_setup_commands."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ${{ inputs.action }}
+        id: power
+        env:
+          ENV_NAME: ${{ inputs.env }}
+          ACTION: ${{ inputs.action }}
+          INCLUDE_DB: ${{ inputs.include_db }}
+        run: |
+          infra/terraform/scripts/env-power.sh "$ENV_NAME" "$ACTION" \
+            --include-db "$INCLUDE_DB"
+
+      - name: Wait for the ingress
+        if: inputs.action == 'resume'
+        env:
+          FQDN: ${{ steps.power.outputs.fqdn }}
+        run: |
+          # Pods are rescheduled once the nodes are back; give them a few minutes.
+          for _ in $(seq 1 60); do
+            if curl -fsS -m 5 -o /dev/null "http://$FQDN/health"; then
+              echo "http://$FQDN is serving"
+              echo "App is serving at http://$FQDN" >>"$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::http://$FQDN/health did not answer within 10 minutes after resume"
+          exit 1
+
+      - name: Setup pnpm
+        if: inputs.action == 'resume'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        if: inputs.action == 'resume'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      # Read-only smoke on both envs: a resume changes no code.
+      - name: Smoke tests
+        if: inputs.action == 'resume'
+        env:
+          BBM_API_URL: http://${{ steps.power.outputs.fqdn }}
+          BBM_WEB_URL: http://${{ steps.power.outputs.fqdn }}
+          BBM_SKIP_ANALYSIS: '1'
+          BBM_SMOKE_READONLY: '1'
+        run: |
+          pnpm install --frozen-lockfile --filter '@bbm/system-tests...'
+          pnpm --filter @bbm/system-tests run test:smoke
+
+  # ---------------------------------------------------------------------
+  # down: destroy the compute stack (AKS + node pools + federated creds).
+  # The data stack (Postgres, Key Vault, storage, IP, identities) is untouched.
+  # ---------------------------------------------------------------------
+  down:
+    name: down (${{ inputs.env }})
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.action == 'down' &&
+      vars.AZURE_SUBSCRIPTION_ID != ''
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    concurrency:
+      group: env-${{ inputs.env }}
+      cancel-in-progress: false
+    timeout-minutes: 60
+    env:
+      ENV_NAME: ${{ inputs.env }}
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - name: Confirm
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+        run: |
+          if [[ "$CONFIRM" != "$ENV_NAME" ]]; then
+            echo "::error::down destroys the $ENV_NAME cluster. Re-run with confirm=$ENV_NAME."
+            exit 1
+          fi
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "::error::This GitHub Environment has no AZURE_CLIENT_ID variable."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: State before
+        run: infra/terraform/scripts/env-power.sh "$ENV_NAME" status
+
+      - name: Destroy compute stack
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          infra/terraform/scripts/tf.sh compute "$ENV_NAME" init
+          infra/terraform/scripts/tf.sh compute "$ENV_NAME" destroy -auto-approve
+          secs=$(( $(date +%s) - start ))
+          echo "_terraform destroy (compute) took $((secs / 60))m $((secs % 60))s._" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Stop Postgres
+        if: inputs.include_db
+        run: infra/terraform/scripts/env-power.sh "$ENV_NAME" db-stop
+
+      - name: Mark down
+        run: |
+          set -euo pipefail
+          infra/terraform/scripts/env-power.sh "$ENV_NAME" mark-down
+          infra/terraform/scripts/env-power.sh "$ENV_NAME" status
+          {
+            echo
+            echo "**$ENV_NAME is down.** Kept: Postgres data, Key Vault, storage, identities, the static IP and DNS name."
+            echo "Still billed: Postgres storage, the public IP, Key Vault/storage/logs (a few USD/month)."
+            echo "Bring it back with action \`up\` (~10-15 min + deploy)."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # up: start Postgres, re-apply the compute stack, then redeploy the last
+  # deployed image tag (redeploy job below).
+  # ---------------------------------------------------------------------
+  up:
+    name: up (${{ inputs.env }})
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.action == 'up' &&
+      vars.AZURE_SUBSCRIPTION_ID != ''
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    concurrency:
+      group: env-${{ inputs.env }}
+      cancel-in-progress: false
+    timeout-minutes: 75
+    env:
+      ENV_NAME: ${{ inputs.env }}
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - name: Check configuration
+        env:
+          CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+        run: |
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "::error::This GitHub Environment has no AZURE_CLIENT_ID variable."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: State before
+        id: before
+        run: infra/terraform/scripts/env-power.sh "$ENV_NAME" status
+
+      # A paused (stopped) cluster must be started before terraform can
+      # reconcile it; resume also starts Postgres. Otherwise just start Postgres.
+      - name: Start Postgres (and a stopped cluster)
+        env:
+          AKS_POWER: ${{ steps.before.outputs.aks_power }}
+        run: |
+          if [[ "$AKS_POWER" == "Stopped" ]]; then
+            infra/terraform/scripts/env-power.sh "$ENV_NAME" resume
+          else
+            infra/terraform/scripts/env-power.sh "$ENV_NAME" db-start
+          fi
+
+      - name: Apply compute stack
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          infra/terraform/scripts/tf.sh compute "$ENV_NAME" init
+          infra/terraform/scripts/tf.sh compute "$ENV_NAME" apply -auto-approve
+          secs=$(( $(date +%s) - start ))
+          echo "_terraform apply (compute) took $((secs / 60))m $((secs % 60))s._" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Mark up
+        run: |
+          set -euo pipefail
+          infra/terraform/scripts/env-power.sh "$ENV_NAME" mark-up
+          infra/terraform/scripts/env-power.sh "$ENV_NAME" status
+          echo "Cluster is up; the **redeploy** job now deploys the last deployed tag." >>"$GITHUB_STEP_SUMMARY"
+
+  redeploy:
+    name: redeploy (${{ inputs.env }})
+    needs: up
+    if: needs.up.result == 'success'
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      env: ${{ inputs.env }}
+      image_tag: ''
+      smoke: true
+
+  # ---------------------------------------------------------------------
+  # Scheduled: nightly auto-pause (+ Sunday retry after the maintenance
+  # window). Pause only. prod runs as prod-power (no reviewer, power-only).
+  # ---------------------------------------------------------------------
+  scheduled-pause:
+    name: auto-pause (${{ matrix.env }})
+    if: >-
+      github.event_name == 'schedule' && github.event.schedule != '30 6 * * *' &&
+      vars.AZURE_SUBSCRIPTION_ID != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [staging, prod]
+    environment: ${{ matrix.env == 'prod' && 'prod-power' || 'staging' }}
+    # Own group (not env-<env>): see the header comment.
+    concurrency:
+      group: env-power-scheduled-${{ matrix.env }}
+      cancel-in-progress: false
+    timeout-minutes: 45
+    steps:
+      - name: Check configuration
+        id: cfg
+        env:
+          CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ENV_NAME: ${{ matrix.env }}
+        run: |
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "::notice::No AZURE_CLIENT_ID for this environment; skipping $ENV_NAME."
+            echo "ok=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.cfg.outputs.ok == 'true'
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        if: steps.cfg.outputs.ok == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Auto-pause
+        if: steps.cfg.outputs.ok == 'true'
+        env:
+          ENV_NAME: ${{ matrix.env }}
+        run: |
+          set +e
+          infra/terraform/scripts/env-power.sh "$ENV_NAME" auto-pause --include-db true
+          rc=$?
+          set -e
+          if [[ $rc -eq 3 ]]; then
+            # Cluster busy (usually the Sunday maintenance window). The Sunday
+            # 11:00 run or the next night retries.
+            echo "::warning::$ENV_NAME could not be paused now (cluster busy); it will be retried."
+            exit 0
+          fi
+          exit "$rc"
+
+  scheduled-repause-db:
+    name: re-pause Postgres (${{ matrix.env }})
+    if: >-
+      github.event_name == 'schedule' && github.event.schedule == '30 6 * * *' &&
+      vars.AZURE_SUBSCRIPTION_ID != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [staging, prod]
+    environment: ${{ matrix.env == 'prod' && 'prod-power' || 'staging' }}
+    # Own group (not env-<env>): see the header comment.
+    concurrency:
+      group: env-power-scheduled-${{ matrix.env }}
+      cancel-in-progress: false
+    timeout-minutes: 30
+    steps:
+      - name: Check configuration
+        id: cfg
+        env:
+          CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ENV_NAME: ${{ matrix.env }}
+        run: |
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "::notice::No AZURE_CLIENT_ID for this environment; skipping $ENV_NAME."
+            echo "ok=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.cfg.outputs.ok == 'true'
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        if: steps.cfg.outputs.ok == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Re-pause Postgres if Azure auto-started it
+        if: steps.cfg.outputs.ok == 'true'
+        env:
+          ENV_NAME: ${{ matrix.env }}
+        run: infra/terraform/scripts/env-power.sh "$ENV_NAME" repause-db

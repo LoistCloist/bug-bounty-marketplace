@@ -1,0 +1,61 @@
+# CI / kind values (ct install, local kind smoke tests).
+#
+# Everything Azure-specific stays off; secrets come from a plain Secret with
+# a dummy DATABASE_URL pointing at an in-cluster `postgres` Service that the
+# CI job provides (or not: the api then fails readiness, which is the
+# signal). Images are expected to be `kind load`-ed, so no registry prefix.
+#
+# global.image.tag is still required: pass it with
+#   ct install --helm-extra-set-args "--set=global.image.tag=<tag>"
+# (ct lint uses `helm-lint-extra-args` from ct.yaml for the same purpose).
+global:
+  image:
+    registry: ""
+    pullPolicy: IfNotPresent
+
+secrets:
+  provider: plain
+  plain:
+    databaseUrl: postgres://bbm:bbm@postgres:5432/bbm
+    llmApiKey: dummy-ci-key
+
+azure:
+  workloadIdentity:
+    enabled: false
+
+api:
+  # Migrations run on boot in CI (no hook Job).
+  migrateOnBoot: true
+  # Small footprint so the kind node fits everything.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+  # A single kind node: spreading is moot.
+  topologySpread: false
+
+web:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+  topologySpread: false
+
+migrations:
+  enabled: false
+analysis:
+  enabled: false
+sandbox:
+  enabled: false
+ingress:
+  enabled: false
+  appRouting:
+    enabled: false
+networkPolicy:
+  enabled: false
