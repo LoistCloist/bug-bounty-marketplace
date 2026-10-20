@@ -43,3 +43,6 @@ broadcast/
 # System tests (tests/e2e Playwright output)
 tests/e2e/playwright-report/
 tests/e2e/test-results/
+
+# Terraform ignores lock files in called modules; only stacks commit one.
+infra/terraform/modules/**/.terraform.lock.hcl
