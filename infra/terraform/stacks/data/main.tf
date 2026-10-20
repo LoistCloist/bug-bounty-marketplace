@@ -41,7 +41,9 @@ module "network" {
   # VNet-integrated flexible servers need a zone ending in
   # .postgres.database.azure.com (privatelink.* is for private endpoints).
   postgres_private_dns_zone_name = "${var.env}.private.postgres.database.azure.com"
-  tags                           = local.tags
+  # NSG Internet-ingress destination (AKS LB floating IP, see the module).
+  ingress_public_ip = azurerm_public_ip.ingress.ip_address
+  tags              = local.tags
 }
 
 module "postgres" {
@@ -64,14 +66,16 @@ module "postgres" {
 module "keyvault" {
   source = "../../modules/keyvault"
 
-  name                      = local.n.key_vault
-  resource_group_name       = local.rg
-  location                  = var.location
-  tenant_id                 = data.azurerm_client_config.current.tenant_id
-  secret_officer_object_ids = var.secret_officer_object_ids
+  name                           = local.n.key_vault
+  resource_group_name            = local.rg
+  location                       = var.location
+  tenant_id                      = data.azurerm_client_config.current.tenant_id
+  secret_officer_sp_object_ids   = var.secret_officer_sp_object_ids
+  secret_officer_user_object_ids = var.secret_officer_user_object_ids
   # CI writes these as gh-bbm-<env>, which has Key Vault Secrets Officer on
   # the data RG (stacks/bootstrap identities.tf, key data-kv-secrets). A human
-  # applying locally must be in secret_officer_object_ids.
+  # applying locally must be in secret_officer_user_object_ids (applied
+  # locally by an Owner, since CI may only grant roles to service principals).
   # Both values are generated here and therefore live in <env>/data.tfstate.
   # llm-api-key is set out of band (az keyvault secret set), never by Terraform.
   secrets = {

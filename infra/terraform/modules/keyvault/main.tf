@@ -3,8 +3,19 @@
 #
 # Writing secrets needs a data-plane role. The env CI identity (gh-bbm-<env>)
 # gets Key Vault Secrets Officer on the whole data RG from stacks/bootstrap,
-# which is inherited by this vault immediately. Humans running Terraform
-# locally need to be listed in var.secret_officer_object_ids.
+# which is inherited by this vault immediately. Extra grants mirror the
+# stacks/global split: service principals (var.secret_officer_sp_object_ids,
+# principal_type ServicePrincipal) can be applied by CI, whose constrained
+# RBAC admin (bootstrap ABAC condition) may only assign roles to service
+# principals. Users (var.secret_officer_user_object_ids, principal_type User)
+# must be applied locally by a subscription Owner first; CI then sees no diff.
+
+locals {
+  secret_officers = merge(
+    { for id in var.secret_officer_sp_object_ids : "sp/${id}" => { id = id, type = "ServicePrincipal" } },
+    { for id in var.secret_officer_user_object_ids : "user/${id}" => { id = id, type = "User" } },
+  )
+}
 
 resource "azurerm_key_vault" "this" {
   name                       = var.name
@@ -27,22 +38,23 @@ resource "azurerm_key_vault" "this" {
 }
 
 resource "azurerm_role_assignment" "secrets_officer" {
-  for_each = toset(var.secret_officer_object_ids)
+  for_each = local.secret_officers
 
   scope                = azurerm_key_vault.this.id
   role_definition_name = "Key Vault Secrets Officer"
-  principal_id         = each.key
+  principal_id         = each.value.id
+  principal_type       = each.value.type
 }
 
 # Role assignments take up to a minute to propagate to the KV data plane.
 # Only needed when this module adds new grants; the CI identity's RG-scoped
 # grant from bootstrap is long-established by the time this stack runs.
 resource "time_sleep" "rbac_propagation" {
-  count = length(var.secret_officer_object_ids) > 0 ? 1 : 0
+  count = length(local.secret_officers) > 0 ? 1 : 0
 
   create_duration = var.rbac_propagation_wait
   triggers = {
-    officers = join(",", sort(var.secret_officer_object_ids))
+    officers = join(",", sort(keys(local.secret_officers)))
   }
 
   depends_on = [azurerm_role_assignment.secrets_officer]
