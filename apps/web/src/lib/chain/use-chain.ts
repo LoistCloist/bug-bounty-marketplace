@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { ensureSignedIn } from "@/lib/api/auth";
 import { useRoleStore } from "@/lib/role/store";
 import { SEED_AUDITOR_ID } from "@/mocks/db";
 import { ANVIL_ACCOUNTS } from "./accounts";
@@ -6,11 +7,17 @@ import { chainCalls, type ChainCalls } from "./calls";
 import { isLocalChain, useChainInfo } from "./config";
 
 /** The selected role's on-chain actions when the API runs on the local chain;
- * null in mock-only mode, where flows keep calling the mock API alone. */
+ * null in mock-only mode, where flows keep calling the mock API alone. Before
+ * signing, each action makes sure the API session is this role's account, so
+ * the API call that follows is made as the same account. */
 export function useChainCalls(): ChainCalls | null {
   const info = useChainInfo();
   const role = useRoleStore((s) => s.role);
-  return useMemo(() => (isLocalChain(info) ? chainCalls(info, ANVIL_ACCOUNTS[role]) : null), [info, role]);
+  return useMemo(() => {
+    if (!isLocalChain(info)) return null;
+    const account = ANVIL_ACCOUNTS[role];
+    return chainCalls(info, account, undefined, { beforeSend: () => ensureSignedIn(account) });
+  }, [info, role]);
 }
 
 /** The auditor id the API knows: the auditor's anvil address on the local

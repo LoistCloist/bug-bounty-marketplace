@@ -4,7 +4,7 @@ import React from "react";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { CONTRACT_SOURCE_MAX_BYTES } from "@bbm/shared";
+import { CONTRACT_SOURCE_MAX_BYTES, type Contract } from "@bbm/shared";
 import { developerApi, ApiError } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
 import { ethToWei } from "@/lib/money";
@@ -36,6 +36,32 @@ export default function SubmitPage() {
   const [currency, setCurrency] = useState("ETH");
   const [deadline, setDeadline] = useState("");
   const [fileError, setFileError] = useState<string | null>(null);
+  // An uploaded contract whose bounty is not funded yet: retrying funds it
+  // without uploading it again.
+  const [unfunded, setUnfunded] = useState<{ contract: Contract; bountyWei: string } | null>(null);
+
+  /** Locks the bounty in BountyEscrow, then lets the API confirm it. Safe to
+   * repeat: a bounty already funded on-chain goes straight to the API. */
+  async function fundAndConfirm(contract: Contract, bountyWei: string): Promise<Contract> {
+    if (!chain) return contract;
+    setUnfunded({ contract, bountyWei });
+    try {
+      await chain.fundBounty(contract.id, new Date(contract.deadline), bountyWei);
+      await developerApi.markFunded(contract.id);
+    } catch (err) {
+      throw new Error(
+        `Contract uploaded, but funding the bounty failed: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
+    setUnfunded(null);
+    return contract;
+  }
+
+  const retryFunding = useMutation({
+    mutationFn: () => fundAndConfirm(unfunded!.contract, unfunded!.bountyWei),
+    onSuccess: (contract) => router.push(`/contracts/${contract.id}`),
+  });
 
   const submitMutation = useMutation({
     mutationFn: async (terms: { deadline: string; bountyAmount: string; currency: string }) => {
@@ -58,7 +84,10 @@ export default function SubmitPage() {
       if (bountyWei === "0") {
         throw new Error("Enter a bounty amount greater than zero.");
       }
-      if (!Number.isFinite(new Date(terms.deadline).getTime()) || new Date(terms.deadline).getTime() <= Date.now()) {
+      if (
+        !Number.isFinite(new Date(terms.deadline).getTime()) ||
+        new Date(terms.deadline).getTime() <= Date.now()
+      ) {
         throw new Error("Choose a deadline in the future.");
       }
       const contract = await developerApi.submitContract({
@@ -70,19 +99,7 @@ export default function SubmitPage() {
         // to the full ISO 8601 string the shared Contract schema expects.
         deadline: new Date(terms.deadline).toISOString(),
       });
-      if (chain) {
-        // Lock the bounty in BountyEscrow, then let the API confirm it.
-        try {
-          await chain.fundBounty(contract.id, new Date(contract.deadline), bountyWei);
-        } catch (err) {
-          throw new Error(
-            `Contract uploaded, but funding the bounty failed: ${err instanceof Error ? err.message : String(err)}`,
-            { cause: err },
-          );
-        }
-        await developerApi.markFunded(contract.id);
-      }
-      return contract;
+      return fundAndConfirm(contract, bountyWei);
     },
     onSuccess: (contract) => {
       router.push(`/contracts/${contract.id}`);
@@ -101,6 +118,9 @@ export default function SubmitPage() {
     setFileError(validationError);
     if (validationError) return;
     const form = new FormData(event.currentTarget as HTMLFormElement);
+    // A new submission replaces any earlier upload still waiting for funding.
+    setUnfunded(null);
+    retryFunding.reset();
     submitMutation.mutate({
       deadline: String(form.get("deadline") ?? ""),
       bountyAmount: String(form.get("bountyAmount") ?? ""),
@@ -108,12 +128,9 @@ export default function SubmitPage() {
     });
   }
 
+  const failed = retryFunding.error ?? submitMutation.error;
   const errorMessage =
-    submitMutation.error instanceof ApiError
-      ? submitMutation.error.message
-      : submitMutation.error instanceof Error
-        ? submitMutation.error.message
-        : null;
+    failed instanceof ApiError ? failed.message : failed instanceof Error ? failed.message : null;
 
   return (
     <div>
@@ -206,6 +223,18 @@ export default function SubmitPage() {
             <p role="alert" className="text-sm text-red-400">
               {errorMessage}
             </p>
+          )}
+          {unfunded && !submitMutation.isPending && (
+            <button
+              type="button"
+              disabled={retryFunding.isPending}
+              onClick={() => retryFunding.mutate()}
+              className="rounded-md border border-emerald-500/50 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-60"
+            >
+              {retryFunding.isPending
+                ? "Funding..."
+                : `Retry funding ${unfunded.contract.filename}`}
+            </button>
           )}
 
           {!wallet.address && (

@@ -15,6 +15,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const chain = {
   fundBounty: vi.fn(),
+  isFunded: vi.fn(),
   stake: vi.fn(),
   openDispute: vi.fn(),
   rule: vi.fn(),
@@ -55,13 +56,16 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 function withClient(children: ReactNode) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   return render(<QueryClientProvider client={client}>{children}</QueryClientProvider>);
 }
 
 beforeEach(() => {
   for (const fn of Object.values(chain)) fn.mockReset();
   vi.mocked(developerApi.markFunded).mockClear();
+  vi.mocked(developerApi.submitContract).mockClear();
   vi.mocked(developerApi.disputeFinding).mockClear();
   vi.mocked(auditorApi.postStake).mockClear();
 });
@@ -69,7 +73,11 @@ beforeEach(() => {
 async function submitVault() {
   withClient(<SubmitPage />);
   fireEvent.change(screen.getByLabelText(/contract source/i), {
-    target: { files: [new File(["pragma solidity ^0.8.19; contract V {}"], "Vault.sol", { type: "text/plain" })] },
+    target: {
+      files: [
+        new File(["pragma solidity ^0.8.19; contract V {}"], "Vault.sol", { type: "text/plain" }),
+      ],
+    },
   });
   fireEvent.change(screen.getByLabelText(/deadline/i), { target: { value: "2030-01-01T00:00" } });
   fireEvent.submit(screen.getByRole("button", { name: /submit contract/i }).closest("form")!);
@@ -93,12 +101,29 @@ describe("lifecycle flows on the local chain", () => {
     expect(developerApi.markFunded).not.toHaveBeenCalled();
   });
 
+  it("retries funding the uploaded contract without uploading it again", async () => {
+    chain.fundBounty
+      .mockRejectedValueOnce(new ChainTxError("TransactionTimeout"))
+      .mockResolvedValue(null);
+    await submitVault();
+    fireEvent.click(await screen.findByRole("button", { name: /retry funding/i }));
+    await waitFor(() => expect(developerApi.markFunded).toHaveBeenCalledWith("contract_1"));
+    expect(chain.fundBounty).toHaveBeenCalledTimes(2);
+    expect(developerApi.submitContract).toHaveBeenCalledOnce();
+  });
+
   it("stakes on-chain instead of posting to the API", async () => {
     const onStaked = vi.fn();
     chain.stake.mockResolvedValue("0xhash");
     withClient(
       <StakeGate
-        profile={{ id: "a", address: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC", stake: "0", reputation: 0, claimedContractIds: [] }}
+        profile={{
+          id: "a",
+          address: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+          stake: "0",
+          reputation: 0,
+          claimedContractIds: [],
+        }}
         auditorId="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
         onStaked={onStaked}
       />,
@@ -126,9 +151,16 @@ describe("lifecycle flows on the local chain", () => {
   };
 
   async function dispute() {
-    withClient(<FindingCard finding={verified} developerAddress="0x70997970C51812dc3A010C7d01b50e0d17dc79C8" />);
+    withClient(
+      <FindingCard
+        finding={verified}
+        developerAddress="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /dispute this finding/i }));
-    fireEvent.change(screen.getByLabelText(/reason for dispute/i), { target: { value: "PoC asserts true" } });
+    fireEvent.change(screen.getByLabelText(/reason for dispute/i), {
+      target: { value: "PoC asserts true" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /submit dispute/i }));
   }
 
