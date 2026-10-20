@@ -167,7 +167,7 @@ for f in values-staging.yaml values-prod.yaml values-ci.yaml; do
   kubeconform -strict -summary -kubernetes-version 1.31.0 \
     -schema-location default \
     -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-    -skip NginxIngressController
+    -schema-location 'kubeconform-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
 done
 
 # rendering without a tag must fail
@@ -177,10 +177,12 @@ helm template bbm bbm -n bbm   # Error: ... global.image.tag is required
 ct lint --config deploy/helm/ct.yaml --charts deploy/helm/bbm
 ```
 
-`NginxIngressController` is not in the datreeio CRD catalog. To validate it,
-convert the `openAPIV3Schema` of
+`NginxIngressController` is not in the datreeio CRD catalog, so its schema is
+vendored in `kubeconform-schemas/nginxingresscontroller_v1alpha1.json`: the
+`openAPIV3Schema` of
 [the operator's CRD](https://github.com/Azure/aks-app-routing-operator/blob/main/config/crd/bases/approuting.kubernetes.azure.com_nginxingresscontrollers.yaml)
-to JSON and pass it as an extra `-schema-location`.
+converted to JSON. Regenerate it the same way if the operator's API changes.
+The CI `helm` job runs the same checks.
 
 `ct` reads `bbm/ci/ci-values.yaml`, which is a symlink to `values-ci.yaml`.
 `.helmignore` excludes it from the packaged chart. `ct install` needs the
