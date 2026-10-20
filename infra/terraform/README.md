@@ -25,6 +25,7 @@ infra/terraform/
     test/, preview/      aca.tfvars, backend.hcl (state key from $TF_STATE_KEY)
   scripts/
     tf.sh                wrapper: picks stack dir, var-file, backend config and state key
+    ci-static.sh         fmt + validate + test + tflint + shellcheck (what CI runs)
     janitor.sh           deletes expired ephemeral ACA resources and stale test state
 ```
 
@@ -226,6 +227,16 @@ The janitor does not touch ACR. The image purge is a separate job in
 the protected tags cannot be locked.
 
 ## Static checks (no Azure credentials needed)
+
+CI (`terraform-static` job) runs `scripts/ci-static.sh`, which does all of
+the below for every stack and module dir that contains `*.tf` (new stacks
+and modules are picked up automatically). Run the same thing locally:
+
+```sh
+infra/terraform/scripts/ci-static.sh     # needs terraform, tflint, shellcheck
+```
+
+Or step by step:
 
 ```sh
 cd infra/terraform
