@@ -1,0 +1,310 @@
+name: Deploy (AKS)
+
+# Deploys the Helm chart (deploy/helm/bbm) to the staging or prod AKS cluster.
+#
+#   - Called by other workflows (workflow_call), e.g. env-power.yml `up`, or
+#     dispatched by hand.
+#   - Skips cleanly (green, with a step summary) when the env is paused or down:
+#     run env-power.yml `resume` / `up` first.
+#   - image_tag empty = redeploy the tag recorded on the data RG
+#     (bbm-last-deployed-tag), which is what env-power `up` relies on.
+#   - Concurrency group env-<env> is shared with env-power.yml, so a deploy and a
+#     power change never race. It is set on the JOB (not the workflow) so a
+#     caller's own job-level group cannot deadlock with it. Callers must not use
+#     the group env-<env> at their workflow level.
+
+on:
+  workflow_call:
+    inputs:
+      env:
+        description: staging | prod
+        type: string
+        required: true
+      image_tag:
+        description: Image tag (sha-<7>). Empty = last deployed tag from the data RG.
+        type: string
+        default: ''
+      smoke:
+        description: Run the smoke suite against the ingress after deploying.
+        type: boolean
+        default: true
+    outputs:
+      result:
+        description: deployed | skipped
+        value: ${{ jobs.deploy.outputs.result }}
+      image_tag:
+        description: The tag that was deployed (empty when skipped).
+        value: ${{ jobs.deploy.outputs.image_tag }}
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Environment
+        type: choice
+        options: [staging, prod]
+        required: true
+      image_tag:
+        description: Image tag (sha-<7>). Empty = last deployed tag.
+        type: string
+        default: ''
+      smoke:
+        description: Run the smoke suite after deploying
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy (${{ inputs.env }})
+    # Azure is not configured until the bootstrap `gh variable set` commands ran.
+    if: vars.AZURE_SUBSCRIPTION_ID != ''
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.env }}
+      url: ${{ steps.ingress.outputs.url }}
+    concurrency:
+      group: env-${{ inputs.env }}
+      cancel-in-progress: false
+    timeout-minutes: 45
+    outputs:
+      result: ${{ steps.gate.outputs.go == 'true' && 'deployed' || 'skipped' }}
+      image_tag: ${{ steps.tag.outputs.tag }}
+    env:
+      ENV_NAME: ${{ inputs.env }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      TFSTATE_RG: ${{ vars.TFSTATE_RG }}
+      TFSTATE_ACCOUNT: ${{ vars.TFSTATE_ACCOUNT }}
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      DATA_RG: rg-bbm-${{ inputs.env }}-data-eus2
+      COMPUTE_RG: rg-bbm-${{ inputs.env }}-compute-eus2
+      CLUSTER: aks-bbm-${{ inputs.env }}-eus2
+    steps:
+      - name: Check inputs and configuration
+        env:
+          CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          case "$ENV_NAME" in staging | prod) ;; *)
+            echo "::error::env must be staging or prod (got '$ENV_NAME')"; exit 1 ;;
+          esac
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "::error::Environment '$ENV_NAME' has no AZURE_CLIENT_ID variable. Run the bootstrap gh_setup_commands."
+            exit 1
+          fi
+          [[ -n "$ACR_NAME" ]] || { echo "::error::Repo variable ACR_NAME is not set."; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Writes aks_power, pg_state, last_deployed_tag, fqdn, ... to outputs and
+      # a state table to the step summary.
+      - name: Environment status
+        id: power
+        run: infra/terraform/scripts/env-power.sh "$ENV_NAME" status
+
+      - name: Power gate
+        id: gate
+        env:
+          AKS_POWER: ${{ steps.power.outputs.aks_power }}
+          AKS_PROV: ${{ steps.power.outputs.aks_provisioning }}
+          PG_STATE: ${{ steps.power.outputs.pg_state }}
+        run: |
+          set -euo pipefail
+          if [[ "$AKS_POWER" == "Running" && "$PG_STATE" == "Ready" ]]; then
+            echo "go=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$AKS_POWER" == "NotFound" ]]; then
+            why="down (no cluster)"; fix="up"
+          else
+            why="paused (AKS $AKS_POWER/$AKS_PROV, Postgres $PG_STATE)"; fix="resume"
+          fi
+          echo "go=false" >>"$GITHUB_OUTPUT"
+          echo "::notice::Deploy skipped: $ENV_NAME is $why. Run env-power.yml with action=$fix."
+          {
+            echo "### Deploy to \`$ENV_NAME\`: skipped"
+            echo
+            echo "Skipped: env is paused/down ($why). Run **env-power** with \`action=$fix\`;"
+            echo "\`up\` redeploys the last deployed tag automatically."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve image tag
+        id: tag
+        if: steps.gate.outputs.go == 'true'
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+          LAST_TAG: ${{ steps.power.outputs.last_deployed_tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$LAST_TAG}"
+          if [[ -z "$tag" ]]; then
+            echo "::error::No image_tag given and $DATA_RG has no bbm-last-deployed-tag tag. Pass image_tag (e.g. sha-1234567)."
+            exit 1
+          fi
+          if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "::error::Invalid image tag '$tag'"
+            exit 1
+          fi
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          echo "Deploying $tag (source: ${INPUT_TAG:+input}${INPUT_TAG:-data RG tag})"
+
+      - name: Setup Terraform
+        if: steps.gate.outputs.go == 'true'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Infra values from the compute stack
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          infra/terraform/scripts/tf.sh compute "$ENV_NAME" init
+          infra/terraform/scripts/tf.sh compute "$ENV_NAME" output -raw helm_values > "$RUNNER_TEMP/values-infra.yaml"
+          test -s "$RUNNER_TEMP/values-infra.yaml" || { echo "::error::helm_values output is empty"; exit 1; }
+
+      - name: Setup Helm
+        if: steps.gate.outputs.go == 'true'
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Setup kubelogin
+        if: steps.gate.outputs.go == 'true'
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.1.4
+
+      # Every image the release will pull (incl. the helm test mirror image)
+      # must exist in ACR before we touch the cluster.
+      - name: Verify images exist in ACR
+        if: steps.gate.outputs.go == 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          registry="$ACR_NAME.azurecr.io"
+          images=$(helm template bbm deploy/helm/bbm -n bbm \
+              -f "deploy/helm/bbm/values-$ENV_NAME.yaml" -f "$RUNNER_TEMP/values-infra.yaml" \
+              --set global.image.tag="$TAG" --set global.requireInfraValues=true |
+            { grep -Eo "$registry/[^\"' ]+" || true; } | sort -u)
+          [[ -n "$images" ]] || { echo "::error::No $registry images found in the rendered chart"; exit 1; }
+          missing=0
+          for ref in $images; do
+            name="${ref#"$registry"/}"
+            if az acr manifest show --registry "$ACR_NAME" --name "$name" -o none 2>/dev/null; then
+              echo "ok      $ref"
+            else
+              echo "::error::missing image $ref"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Cluster credentials
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          az aks get-credentials -g "$COMPUTE_RG" -n "$CLUSTER" --format azure --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
+          kubectl get nodes -o wide
+
+      - name: Helm upgrade
+        if: steps.gate.outputs.go == 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          helm upgrade --install bbm deploy/helm/bbm \
+            --namespace bbm --create-namespace \
+            -f "deploy/helm/bbm/values-$ENV_NAME.yaml" \
+            -f "$RUNNER_TEMP/values-infra.yaml" \
+            --set global.image.tag="$TAG" \
+            --set global.requireInfraValues=true \
+            --atomic --wait --timeout 10m --history-max 5
+
+      - name: Helm test
+        if: steps.gate.outputs.go == 'true'
+        run: helm test bbm -n bbm --timeout 5m --logs
+
+      - name: Ingress URL
+        id: ingress
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          values=$(helm get values bbm -n bbm --all -o json)
+          host=$(jq -r '.ingress.host // empty' <<<"$values")
+          mode=$(jq -r '.ingress.tls.mode // "none"' <<<"$values")
+          [[ -n "$host" ]] || { echo "::error::release has no ingress.host"; exit 1; }
+          scheme=https
+          [[ "$mode" == "none" ]] && scheme=http
+          echo "url=$scheme://$host" >>"$GITHUB_OUTPUT"
+          # The LB / DNS can lag the rollout by a minute or two.
+          for _ in $(seq 1 30); do
+            if curl -fsS -m 5 -o /dev/null "$scheme://$host/health"; then
+              echo "ingress is serving $scheme://$host"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$scheme://$host/health did not answer within 5 minutes"
+          exit 1
+
+      - name: Setup pnpm
+        if: steps.gate.outputs.go == 'true' && inputs.smoke
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        if: steps.gate.outputs.go == 'true' && inputs.smoke
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      # Read-only by default; the create+read round-trip is opt-in
+      # (BBM_SMOKE_WRITE=1) and only enabled on staging.
+      - name: Smoke tests
+        if: steps.gate.outputs.go == 'true' && inputs.smoke
+        env:
+          BBM_API_URL: ${{ steps.ingress.outputs.url }}
+          BBM_WEB_URL: ${{ steps.ingress.outputs.url }}
+          BBM_SKIP_ANALYSIS: '1'
+          BBM_SMOKE_WRITE: ${{ inputs.env == 'staging' && '1' || '' }}
+          BBM_SMOKE_READONLY: ${{ inputs.env == 'prod' && '1' || '' }}
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile --filter '@bbm/system-tests...'
+          pnpm --filter @bbm/system-tests run test:smoke
+
+      - name: Record deployed tag
+        if: steps.gate.outputs.go == 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          URL: ${{ steps.ingress.outputs.url }}
+          SMOKE: ${{ inputs.smoke }}
+        run: |
+          set -euo pipefail
+          rg_id=$(az group show -n "$DATA_RG" --query id -o tsv)
+          az tag update --resource-id "$rg_id" --operation merge -o none \
+            --tags "bbm-last-deployed-tag=$TAG" "deployed-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "### Deployed \`$TAG\` to \`$ENV_NAME\`"
+            echo
+            echo "- URL: $URL"
+            echo "- Release: \`helm history bbm -n bbm\` (revision $(helm history bbm -n bbm -o json | jq -r '.[-1].revision'))"
+            echo "- Smoke: $([[ "$SMOKE" == true ]] && echo passed || echo skipped)"
+            echo "- \`bbm-last-deployed-tag\` on \`$DATA_RG\` = \`$TAG\`"
+          } >>"$GITHUB_STEP_SUMMARY"
