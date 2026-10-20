@@ -16,3 +16,14 @@
         includes `required_status_checks`.
       - A PR with a failing check shows "Required statuses must pass" and can't be merged.
       - A docs-only PR still gets `CI OK` and stays mergeable.
+
+## MVP decisions to revisit
+
+- [ ] **Disputes: developer only for MVP.** `DisputeResolution.openDispute` only
+      accepts the developer, which matches US7 and the current contract. M1 R21
+      says developers *and* auditors can open disputes. Before post-MVP, ask the
+      team what an auditor-opened dispute means and against whom, then decide
+      whether to change the contract (needs a redeploy).
+- [ ] **Amounts: wei as decimal strings.** Money goes over the API as wei strings,
+      not JS numbers. The shared `BountySchema.amount` and the web mocks still use
+      numbers and must be migrated (plan Phase 1).
