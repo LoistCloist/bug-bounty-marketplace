@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { buildApp } from "./app.js";
 import { PgContractRepository } from "./contracts/pg-repository.js";
+import { PgPipelineRepository } from "./pipeline/pg-repository.js";
 import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
 import { runMigrations } from "./db/migrate.js";
 import { parseBoolEnv, parseIntEnv } from "./env.js";
@@ -19,6 +20,7 @@ const pool = databaseUrl
 
 const app = buildApp({
   repository: pool ? new PgContractRepository(pool) : undefined,
+  pipeline: pool ? new PgPipelineRepository(pool) : undefined,
   storage: storageDir ? new LocalSourceStorage(storageDir) : new MemorySourceStorage(),
 });
 const port = Number(process.env.PORT ?? 3001);

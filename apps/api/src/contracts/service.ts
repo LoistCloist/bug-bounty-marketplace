@@ -47,8 +47,8 @@ function collectIssues(result: {
 }
 
 /**
- * Validates a `.sol` submission, stores its bytes, and records the contract
- * and its bounty. Storage is written before the DB rows, so a failed insert
+ * Validates a `.sol` submission, stores its bytes, and records the contract,
+ * its bounty and a queued analysis job. Storage is written before the DB rows, so a failed insert
  * leaves an unreferenced object rather than a row pointing at nothing.
  */
 export async function submitContract(
@@ -94,6 +94,15 @@ export async function submitContract(
     deadline: fields.deadline,
   };
 
-  await deps.repository.insertContract({ contract, bounty });
+  await deps.repository.insertContract({
+    contract,
+    bounty,
+    analysisJob: {
+      id: `job_${randomUUID()}`,
+      kind: "analysis",
+      subjectId: contractId,
+      createdAt: now,
+    },
+  });
   return contract;
 }

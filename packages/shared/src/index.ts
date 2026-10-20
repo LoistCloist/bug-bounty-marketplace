@@ -12,3 +12,4 @@ export * from "./finding";
 export * from "./poc-submission";
 export * from "./dispute";
 export * from "./auditor-profile";
+export * from "./analysis";

@@ -16,3 +16,20 @@ export const PoCSubmissionSchema = z.object({
   sandboxLog: z.string().nullable().default(null),
 });
 export type PoCSubmission = z.infer<typeof PoCSubmissionSchema>;
+
+/** Upper bound on an uploaded PoC test file, in bytes. The API enforces it;
+ * keep the web form in sync through this constant. */
+export const POC_SOURCE_MAX_BYTES = 102_400; // 100 KB
+
+/** PoCs are Foundry test files. */
+export const PocSourceFilenameSchema = z
+  .string()
+  .min(1)
+  .regex(/\.t\.sol$/i, { error: "Filename must end in .t.sol" });
+
+/** Size check for an uploaded PoC file, applied to its byte length. */
+export const PocSourceSizeSchema = z
+  .number()
+  .int()
+  .min(1, { error: "PoC file must not be empty" })
+  .max(POC_SOURCE_MAX_BYTES, { error: "PoC file exceeds the 100 KB limit" });

@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import {
+  AnalysisStatusSchema,
   AuditorProfileSchema,
   BountySchema,
   ContractSchema,
@@ -35,6 +36,7 @@ const entities: Record<string, z.ZodType> = {
   PoCSubmission: PoCSubmissionSchema,
   Dispute: DisputeSchema,
   AuditorProfile: AuditorProfileSchema,
+  AnalysisStatus: AnalysisStatusSchema,
 };
 
 describe("generated JSON Schema output", () => {

@@ -13,12 +13,14 @@ describe.skipIf(!databaseUrl)("PgContractRepository", () => {
   const repository = new PgContractRepository(pool);
   const contractId = `contract_${randomUUID()}`;
   const bountyId = `bounty_${randomUUID()}`;
+  const jobId = `job_${randomUUID()}`;
 
   beforeAll(async () => {
     await runMigrations(pool);
   });
 
   afterAll(async () => {
+    await pool.query("DELETE FROM jobs WHERE id = $1", [jobId]);
     await pool.query("DELETE FROM contracts WHERE id = $1", [contractId]);
     await pool.query("DELETE FROM bounties WHERE id = $1", [bountyId]);
     await pool.end();
@@ -46,6 +48,12 @@ describe.skipIf(!databaseUrl)("PgContractRepository", () => {
         currency: "ETH",
         fundedAt: "2026-10-01T12:00:00.000Z",
         deadline: "2030-01-01T00:00:00.000Z",
+      },
+      analysisJob: {
+        id: jobId,
+        kind: "analysis",
+        subjectId: contractId,
+        createdAt: "2026-10-01T12:00:00.000Z",
       },
     });
 
