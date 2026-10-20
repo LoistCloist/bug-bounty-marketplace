@@ -186,10 +186,8 @@ jobs:
   # ---------------------------------------------------------------------
   # Guarded ACR purge as gh-bbm-global (environment `infra-global`,
   # required reviewer). Runs only when requested AND the deployed tags
-  # were read successfully. janitor.sh --acr-purge would also re-run the
-  # sweep, which this identity has no rights for, so the same `acr purge`
-  # command is run directly here; keep the filters in sync with
-  # scripts/janitor.sh step 3.
+  # were read successfully. This is the only place images are purged:
+  # scripts/janitor.sh deliberately has no ACR step.
   # ---------------------------------------------------------------------
   acr-purge:
     name: ACR purge
@@ -254,7 +252,6 @@ jobs:
             echo "dry run: protected tags are not locked, so the --dry-run report may list them; a real run keeps them"
           fi
 
-          # Same as scripts/janitor.sh --acr-purge.
           purge_cmd="acr purge --filter 'bbm/.*:pr-.*' --filter 'bbm/.*:sha-.*' --ago 30d --keep 10 --untagged"
           [[ "$APPLY" == "true" ]] || purge_cmd+=" --dry-run"
           echo "acr run on $ACR_NAME: $purge_cmd"
