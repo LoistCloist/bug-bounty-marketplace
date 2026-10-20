@@ -219,6 +219,28 @@ describe("runOnce", () => {
     expect(findingStatus.statuses.get(FINDING_API_ID)).toBe("Verified");
   });
 
+  it("skips an event that would make an illegal move and keeps indexing past it", async () => {
+    // Submitted -> Paid is illegal, so the PayoutCredited is skipped. The
+    // later FindingVerified must still apply, or one bad log would stall the chain.
+    const logs = [
+      makeLog(
+        bountyEscrowAbi,
+        "PayoutCredited",
+        { contractId: CONTRACT_KEY, findingId: FINDING_KEY, auditor: AUDITOR, amount: 10n ** 18n },
+        spot(3n, 0),
+      ),
+      verifiedLog(4n, 0),
+    ];
+    const { options, findingStatus } = setup(10n, logs);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await runOnce(options);
+
+    expect(findingStatus.calls.map((c) => c.status)).toEqual(["Verified"]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("skipped PayoutCredited"));
+    warn.mockRestore();
+  });
+
   it("ignores events that do not change status, without throwing", async () => {
     const logs = [
       makeLog(

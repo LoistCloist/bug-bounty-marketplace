@@ -4,6 +4,7 @@ import type { ChainConfig } from "../chain/config.js";
 import { onchainId } from "../chain/ids.js";
 import { decodeChainLog, statusEffectOf, type AbiByAddress, type ChainLog } from "./events.js";
 import { applyIndexedStatus, type IndexerFindingStore } from "./finding-status.js";
+import { InvalidTransitionError } from "../status/transitions.js";
 import type { IndexerRepository } from "./repository.js";
 
 /** The slice of a viem PublicClient the indexer reads from. */
@@ -120,7 +121,17 @@ export async function runOnce(options: EventIndexerOptions): Promise<RunResult> 
     // Status first, then the applied marker. A crash between the two replays
     // this log, so applyIndexedStatus must tolerate re-applying the same status.
     const at = now();
-    await applyIndexedStatus(findingStatus, findingId, effect.status, at);
+    try {
+      await applyIndexedStatus(findingStatus, findingId, effect.status, at);
+    } catch (err) {
+      // An event that would make an illegal move is recorded as handled and
+      // skipped. Throwing here would stop the run before the checkpoint
+      // advances, so every later run would hit the same log again.
+      if (!(err instanceof InvalidTransitionError)) throw err;
+      console.warn(`indexer skipped ${decoded.eventName} for ${findingId}: ${err.message}`);
+      await repository.markApplied({ ...key, eventName: decoded.eventName, appliedAt: at });
+      return "ignored";
+    }
     await repository.markApplied({ ...key, eventName: decoded.eventName, appliedAt: at });
     return "applied";
   }
