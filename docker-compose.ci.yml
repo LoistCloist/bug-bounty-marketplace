@@ -1,0 +1,24 @@
+# CI overrides: throwaway storage, never pull/build (images are built by the
+# workflow first), and expose deployed contract addresses to the host so the
+# system tests can read them.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait --no-build
+
+services:
+  db:
+    # Replace the named data volume with tmpfs (compose >= 2.24 for !reset).
+    volumes: !reset []
+    tmpfs:
+      - /var/lib/postgresql/data
+  api:
+    pull_policy: never
+  web:
+    pull_policy: never
+  analysis:
+    pull_policy: never
+  anvil:
+    pull_policy: never
+  contracts-deploy:
+    pull_policy: never
+    volumes:
+      - ./.ci/deployments:/contracts/deployments

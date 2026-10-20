@@ -26,6 +26,8 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       shared: ${{ steps.filter.outputs.shared }}
       contracts: ${{ steps.filter.outputs.contracts }}
+      analysis: ${{ steps.filter.outputs.analysis }}
+      containers: ${{ steps.filter.outputs.containers }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -73,6 +75,25 @@ jobs:
             # Separate toolchain (Foundry/Solidity) - not affected by
             # root JS/TS tooling config.
             contracts:
+              - 'contracts/**'
+
+            # Python worker; also re-run when the shared JSON Schemas change,
+            # since its pydantic models are generated from them.
+            analysis:
+              - 'workers/analysis/**'
+              - 'packages/shared/schema/**'
+              - '.github/workflows/ci.yml'
+
+            # Anything that can change a container image or the compose
+            # stack. The containers job builds every image and boots the
+            # full stack, so it fans out from all component sources.
+            containers:
+              - '**/Dockerfile'
+              - '**/.dockerignore'
+              - 'docker-compose*.yml'
+              - 'apps/**'
+              - 'packages/shared/**'
+              - 'workers/**'
               - 'contracts/**'
 
   # ---------------------------------------------------------------------
@@ -214,6 +235,10 @@ jobs:
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pinned: gas snapshots differ across forge versions. Keep in sync
+          # with contracts/Dockerfile.
+          version: v1.3.5
 
       - name: Forge build
         working-directory: contracts
@@ -222,6 +247,16 @@ jobs:
       - name: Forge test
         working-directory: contracts
         run: forge test -vvv
+
+      # Regression: fail when gas usage changes without the committed
+      # snapshot being updated (`forge snapshot` and commit the result).
+      - name: Gas snapshot check
+        working-directory: contracts
+        run: forge snapshot --check
+
+      - name: Deploy script dry run
+        working-directory: contracts
+        run: forge script script/Deploy.s.sol
 
       - name: Slither static analysis
         uses: crytic/slither-action@v0.4.0
@@ -233,6 +268,143 @@ jobs:
           fail-on: none
 
   # ---------------------------------------------------------------------
+  # workers/analysis - Python (uv) worker. Unit tests run with sockets
+  # disabled (pytest-socket), and the pydantic models generated from
+  # packages/shared/schema must be up to date.
+  # ---------------------------------------------------------------------
+  analysis:
+    name: analysis
+    needs: changes
+    if: needs.changes.outputs.analysis == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/analysis
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: workers/analysis/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+
+      - name: Test (pytest)
+        run: uv run pytest -q
+
+      - name: Fail if generated models are out of date
+        run: |
+          uv run scripts/gen-types.sh
+          git diff --exit-code -- src/analysis/generated
+
+  # ---------------------------------------------------------------------
+  # containers - lint every Dockerfile, build every image (BuildKit, GHA
+  # layer cache, never pushed), then boot the full compose stack and
+  # smoke-test it: health endpoints, a contract upload through the web
+  # proxy into the real API + Postgres, and a contract deploy to anvil.
+  # ---------------------------------------------------------------------
+  containers:
+    name: containers
+    needs: changes
+    if: needs.changes.outputs.containers == 'true' || needs.changes.outputs.root == 'true'
+    runs-on: ubuntu-latest
+    env:
+      BBM_TAG: ci
+      COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Lint Dockerfiles (hadolint)
+        run: |
+          for f in apps/api/Dockerfile apps/web/Dockerfile workers/analysis/Dockerfile contracts/Dockerfile; do
+            echo "::group::$f"
+            docker run --rm -i hadolint/hadolint:v2.12.0 < "$f"
+            echo "::endgroup::"
+          done
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build images
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: docker-compose.yml
+          targets: api,web,analysis,anvil
+          load: true
+          set: |
+            api.cache-from=type=gha,scope=api
+            api.cache-to=type=gha,mode=max,scope=api
+            web.cache-from=type=gha,scope=web
+            web.cache-to=type=gha,mode=max,scope=web
+            analysis.cache-from=type=gha,scope=analysis
+            analysis.cache-to=type=gha,mode=max,scope=analysis
+            anvil.cache-from=type=gha,scope=contracts
+            anvil.cache-to=type=gha,mode=max,scope=contracts
+
+      - name: Images run as non-root
+        run: |
+          for svc in api web analysis contracts; do
+            uid=$(docker run --rm --entrypoint id "bbm/$svc:ci" -u)
+            echo "$svc uid=$uid"
+            test "$uid" != "0"
+          done
+
+      - name: Start stack
+        run: $COMPOSE up -d --wait --wait-timeout 180 --no-build db api web analysis anvil
+
+      - name: Deploy contracts to anvil
+        run: |
+          mkdir -p .ci/deployments && chmod 777 .ci/deployments
+          $COMPOSE run --rm contracts-deploy
+          cat .ci/deployments/31337.json
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          curl -fsS localhost:3001/health
+          curl -fsS localhost:3000/healthz
+          curl -fsS localhost:8000/health
+          curl -fsS -o /dev/null localhost:3000/
+          printf 'pragma solidity ^0.8.19;\ncontract Smoke {}\n' > /tmp/Smoke.sol
+          # Upload through the web proxy -> api -> Postgres, then read it back.
+          id=$(curl -fsS -F file=@/tmp/Smoke.sol \
+            -F developerAddress=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 \
+            -F bountyAmount=1000000000000000000 -F currency=ETH \
+            -F deadline=2030-01-01T00:00:00.000Z \
+            localhost:3000/api/contracts | jq -r .id)
+          echo "created contract $id"
+          curl -fsS "localhost:3000/api/contracts/$id" | jq -e --arg id "$id" '.id == $id'
+
+      - name: Dump logs on failure
+        if: failure()
+        run: $COMPOSE logs --no-color > compose.log
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: compose.log
+
+      - name: Stop stack
+        if: always()
+        run: $COMPOSE --profile deploy down -v
+
+  # ---------------------------------------------------------------------
   # Single required status check for branch protection: succeeds as
   # long as every needed job either succeeded or was skipped (because
   # its path filter didn't match), and fails if any of them actually
@@ -241,7 +413,7 @@ jobs:
   ci-ok:
     name: CI OK
     if: always()
-    needs: [changes, web, shared, api, contracts]
+    needs: [changes, web, shared, api, contracts, analysis, containers]
     runs-on: ubuntu-latest
     steps:
       - name: Check required job results
@@ -256,6 +428,8 @@ jobs:
             [shared]="${{ needs.shared.result }}"
             [api]="${{ needs.api.result }}"
             [contracts]="${{ needs.contracts.result }}"
+            [analysis]="${{ needs.analysis.result }}"
+            [containers]="${{ needs.containers.result }}"
           )
           failed=0
           for job in "${!results[@]}"; do
