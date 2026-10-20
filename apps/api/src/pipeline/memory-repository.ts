@@ -14,6 +14,7 @@ import type {
   JobStatus,
   NewPocRecord,
   PipelineRepository,
+  UnappliedVerdict,
 } from "./repository.js";
 
 export interface StoredContract {
@@ -45,6 +46,8 @@ export class MemoryStore {
   readonly bounties = new Map<string, Bounty>();
   readonly findings = new Map<string, FindingRecord>();
   readonly pocs = new Map<string, PoCSubmission>();
+  /** PoC id → when its verdict was applied (poc_submissions.verdict_applied_at). */
+  readonly verdictsApplied = new Map<string, string>();
   readonly jobs = new Map<string, StoredJob>();
 
   /** The contract's claim if it has not expired at `now`. */
@@ -135,5 +138,28 @@ export class MemoryPipelineRepository implements PipelineRepository {
     const poc = this.store.pocs.get(pocId);
     if (!poc) throw new Error(`Unknown PoC ${pocId}`);
     poc.sandboxStatus = sandboxStatus;
+  }
+
+  async listUnappliedVerdicts(limit: number): Promise<UnappliedVerdict[]> {
+    return [...this.store.pocs.values()]
+      .filter(
+        (poc) =>
+          (poc.sandboxStatus === "Passed" || poc.sandboxStatus === "Failed") &&
+          !this.store.verdictsApplied.has(poc.id) &&
+          this.store.findings.get(poc.findingId)?.status === "Submitted",
+      )
+      .sort((a, b) => a.submittedAt.localeCompare(b.submittedAt) || a.id.localeCompare(b.id))
+      .slice(0, limit)
+      .map((poc) => ({
+        pocId: poc.id,
+        findingId: poc.findingId,
+        verdict: poc.sandboxStatus as "Passed" | "Failed",
+      }));
+  }
+
+  async markVerdictApplied(pocId: string, at: Date): Promise<void> {
+    if (!this.store.pocs.has(pocId)) throw new Error(`Unknown PoC ${pocId}`);
+    if (!this.store.verdictsApplied.has(pocId))
+      this.store.verdictsApplied.set(pocId, at.toISOString());
   }
 }

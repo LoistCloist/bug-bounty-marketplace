@@ -5,6 +5,7 @@ import { claimLockEnabled, loadChainConfig } from "./chain/config.js";
 import { createChainActions, type ChainActions } from "./chain/actions.js";
 import { PgChainActionStore } from "./chain/pg-action-store.js";
 import { startPayoutKeeper, type PayoutKeeper } from "./chain/payout-keeper.js";
+import { runVerdictsOnce, startVerdictLoop } from "./chain/verdict-loop.js";
 import { PgContractRepository } from "./contracts/pg-repository.js";
 import { PgPipelineRepository } from "./pipeline/pg-repository.js";
 import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
@@ -61,6 +62,8 @@ const app = buildApp({
 
 /** Runs the payout keeper only when a chain is configured. */
 let payoutKeeper: PayoutKeeper | undefined;
+/** Applies sandbox verdicts on-chain; runs only when a chain is configured. */
+let verdictLoop: PayoutKeeper | undefined;
 const port = Number(process.env.PORT ?? 3001);
 
 // app.ts builds Fastify with `logger: false` (keeps tests quiet), so
@@ -72,6 +75,17 @@ async function start(): Promise<void> {
   }
   await app.listen({ port, host: "0.0.0.0" });
   console.log(`@bbm/api listening on port ${port}`);
+  if (chainActions && pool) {
+    const pipeline = new PgPipelineRepository(pool);
+    verdictLoop = startVerdictLoop({
+      intervalMs: parseIntEnv(process.env.VERDICT_INTERVAL_MS, 2000),
+      runOnce: async () => {
+        const summary = await runVerdictsOnce({ pipeline, chainActions });
+        if (summary.applied + summary.failed > 0) console.log(`@bbm/api verdict pass: ${JSON.stringify(summary)}`);
+      },
+      onError: (err) => console.error("@bbm/api verdict pass failed", err),
+    });
+  }
   if (chainActions) {
     const intervalSeconds = parseIntEnv(process.env.PAYOUT_KEEPER_INTERVAL_SECONDS, 60);
     payoutKeeper = startPayoutKeeper({
@@ -106,6 +120,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS).unref();
   try {
+    await verdictLoop?.stop();
     await payoutKeeper?.stop();
     await app.close();
     await pool?.end();

@@ -338,6 +338,25 @@ export function describeRepositories(
       expect(await h.jobsFor(poc.id)).toEqual([{ kind: "sandbox", status: "queued" }]);
     });
 
+    it("lists decided, unapplied verdicts for Submitted findings until marked applied", async () => {
+      const { contract } = await insert();
+      const finding = makeFinding(contract.id);
+      await h.seedFinding(finding);
+      await h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0);
+      const { poc, job } = makePoc(finding.id);
+      await h.pipeline.submitPoc({ poc, job, findingId: finding.id, now: poc.submittedAt });
+      const mine = async () =>
+        (await h.pipeline.listUnappliedVerdicts(100)).filter((v) => v.pocId === poc.id);
+
+      expect(await mine()).toEqual([]);
+      await h.pipeline.recordVerdict(poc.id, "Passed");
+      expect(await mine()).toEqual([{ pocId: poc.id, findingId: finding.id, verdict: "Passed" }]);
+
+      await h.pipeline.markVerdictApplied(poc.id, minutes(2));
+      await h.pipeline.markVerdictApplied(poc.id, minutes(3));
+      expect(await mine()).toEqual([]);
+    });
+
     it("a second submitPoc on the same finding is not_flagged and writes nothing", async () => {
       const { contract } = await insert();
       const finding = makeFinding(contract.id);
