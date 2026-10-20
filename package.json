@@ -18,6 +18,7 @@
     "stack:deploy-contracts": "docker compose run --rm contracts-deploy",
     "stack:demo": "bash scripts/demo-stack.sh",
     "demo:lifecycle": "bash scripts/demo-lifecycle.sh",
+    "demo:prep": "bash scripts/demo-prep.sh",
     "test:integration": "pnpm --filter @bbm/system-tests run test:integration",
     "test:regression": "pnpm --filter @bbm/system-tests run test:regression",
     "test:smoke": "pnpm --filter @bbm/system-tests run test:smoke",
