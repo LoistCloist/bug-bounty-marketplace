@@ -10,6 +10,8 @@ import {
 } from "@bbm/shared";
 import { buildApp } from "../app.js";
 import type { AuditorStakingPort } from "../chain/auditor-staking.js";
+import { createChainActions } from "../chain/actions.js";
+import { MemoryChainActionStore } from "../chain/memory-action-store.js";
 import { MemoryContractRepository } from "../contracts/memory-repository.js";
 import { MemorySourceStorage } from "../contracts/storage.js";
 import { multipartBody } from "../testing/http.js";
@@ -341,19 +343,27 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
   function chainSetup(lockImpl: (auditor: Address) => Promise<Hash> = async () => LOCK_HASH) {
     const store = new MemoryStore();
     const repository = new MemoryContractRepository(store);
+    const clock = { now: T0 };
     const lock = vi.fn(lockImpl);
+    const unlock = vi.fn(async () => LOCK_HASH);
     const auditorStaking: AuditorStakingPort = {
       stakeOf: vi.fn(),
       activeSubmissions: vi.fn(),
       lockSubmission: lock,
-      unlockSubmission: vi.fn(),
+      unlockSubmission: unlock,
     };
+    const chainActions = createChainActions({
+      store: new MemoryChainActionStore(store),
+      auditorStaking,
+      claimLockEnabled: true,
+      now: () => clock.now,
+    });
     const app = buildApp({
       repository,
       pipeline: new MemoryPipelineRepository(store),
       storage: new MemorySourceStorage(),
-      config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => T0 },
-      auditorStaking,
+      config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => clock.now },
+      chainActions,
     });
     const seedContract = async () => {
       const record = makeContract();
@@ -362,7 +372,11 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     };
     const claim = (contractId: string, auditorId: string) =>
       app.inject({ method: "POST", url: "/api/auditor/claim", payload: { contractId, auditorId } });
-    return { app, repository, lock, seedContract, claim };
+    const queue = () => app.inject({ method: "GET", url: "/api/auditor/queue" });
+    const advance = (seconds: number) => {
+      clock.now = new Date(clock.now.getTime() + seconds * 1000);
+    };
+    return { app, repository, lock, unlock, seedContract, claim, queue, advance };
   }
 
   it("locks the auditor's stake after a successful claim", async () => {
@@ -414,6 +428,34 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     expect(response.statusCode).toBe(400);
     expect(lock).not.toHaveBeenCalled();
     expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+  });
+
+  it("releases a lapsed lock once, on the first queue read after expiry", async () => {
+    const { seedContract, claim, lock, unlock, queue, advance } = chainSetup();
+    const contract = await seedContract();
+    await claim(contract.id, AUDITOR_A);
+    expect(lock).toHaveBeenCalledTimes(1);
+
+    advance(CLAIM_WINDOW_SECONDS + 1);
+    expect((await queue()).statusCode).toBe(200);
+    expect(unlock).toHaveBeenCalledTimes(1);
+    expect(unlock).toHaveBeenCalledWith(AUDITOR_A);
+
+    await queue();
+    expect(unlock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the lapsed lock before a new claim replaces it", async () => {
+    const { seedContract, claim, lock, unlock, advance } = chainSetup();
+    const contract = await seedContract();
+    await claim(contract.id, AUDITOR_A);
+
+    advance(CLAIM_WINDOW_SECONDS + 1);
+    const second = await claim(contract.id, AUDITOR_B);
+    expect(second.statusCode).toBe(200);
+    expect(unlock).toHaveBeenCalledTimes(1);
+    expect(unlock).toHaveBeenCalledWith(AUDITOR_A);
+    expect(lock).toHaveBeenLastCalledWith(AUDITOR_B);
   });
 
   it("skips the lock entirely when no chain is configured", async () => {
