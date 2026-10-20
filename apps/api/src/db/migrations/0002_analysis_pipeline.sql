@@ -4,8 +4,29 @@
 
 -- The active claim lives on the contract. It is not part of the shared
 -- Contract schema; the API maps it onto each Finding instead.
-ALTER TABLE contracts ADD COLUMN IF NOT EXISTS claimed_by_auditor_id TEXT;
-ALTER TABLE contracts ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ;
+--
+-- Guarded by a catalog check rather than ADD COLUMN IF NOT EXISTS: ALTER TABLE
+-- takes an ACCESS EXCLUSIVE lock even when the column already exists, and
+-- this file re-runs on every API boot, so it would queue behind (and then
+-- block) every reader of contracts, e.g. a worker mid-analysis.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema() AND table_name = 'contracts'
+       AND column_name = 'claimed_by_auditor_id'
+  ) THEN
+    ALTER TABLE contracts ADD COLUMN claimed_by_auditor_id TEXT;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema() AND table_name = 'contracts'
+       AND column_name = 'claim_expires_at'
+  ) THEN
+    ALTER TABLE contracts ADD COLUMN claim_expires_at TIMESTAMPTZ;
+  END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS findings (
   id                          TEXT PRIMARY KEY,
@@ -56,3 +77,14 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS jobs_claimable_idx ON jobs (status, created_at);
 CREATE INDEX IF NOT EXISTS jobs_subject_idx ON jobs (subject_id);
+
+-- Contracts stored before this migration never got an analysis job; queue
+-- one for each so they are analysed too. New contracts get their job in the
+-- same transaction as the insert, so this only ever matches older rows.
+INSERT INTO jobs (id, kind, subject_id, status, attempts, created_at, updated_at)
+SELECT 'job_backfill_' || c.id, 'analysis', c.id, 'queued', 0, now(), now()
+  FROM contracts c
+ WHERE NOT EXISTS (
+   SELECT 1 FROM jobs j WHERE j.kind = 'analysis' AND j.subject_id = c.id
+ )
+ON CONFLICT (id) DO NOTHING;
