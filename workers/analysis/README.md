@@ -24,6 +24,7 @@ image pre-installs them. A pragma no version satisfies fails with
 | --- | --- | --- |
 | `DATABASE_URL`, `SOURCE_STORAGE_DIR` | unset | Both set: run the job poller (same Postgres and storage as the API). |
 | `LLM_ENDPOINT`, `LLM_MODEL`, `LLM_API_KEY` | unset | OpenAI-compatible chat endpoint (e.g. Azure AI Foundry `https://<resource>.services.ai.azure.com/openai/v1`). Any unset: Slither text only. |
+| `LLM_TIMEOUT_SECONDS` | `90` | Per-attempt LLM timeout (one retry). Reasoning models take ~20-30 s per contract. |
 | `POLL_INTERVAL_SECONDS` | `1` | Wait between polls when the queue is empty. |
 | `JOB_LEASE_SECONDS` / `JOB_MAX_ATTEMPTS` | `600` / `3` | Lease before a crashed job is retried; attempts before it fails. |
 | `WORKER_CONCURRENCY` | `2` | Jobs processed at once. |
