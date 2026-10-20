@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import type { Finding } from "@bbm/shared";
 import { auditorApi, ApiError } from "@/lib/api";
+import { isLocalChain, useChainInfo } from "@/lib/chain/config";
 
 const SEVERITY_STYLES: Record<Finding["severity"], string> = {
   Critical: "bg-red-500/20 text-red-400",
@@ -38,6 +39,7 @@ export function FindingCard({
   stakeMet: boolean;
   onChanged: () => void;
 }) {
+  const onChain = isLocalChain(useChainInfo());
   const [file, setFile] = useState<File | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -113,12 +115,16 @@ export function FindingCard({
       )}
       {finding.status === "Verified" && (
         <p className="mt-3 text-sm text-emerald-300">
-          Exploit verified in the demo sandbox. Awaiting the challenge window before payout.
+          {onChain
+            ? "Exploit reproduced in the Foundry sandbox. The bounty is paid on-chain once the challenge window closes."
+            : "Exploit verified in the demo sandbox. Awaiting the challenge window before payout."}
         </p>
       )}
       {finding.status === "Paid" && (
         <p className="mt-3 text-sm text-emerald-300">
-          Demo bounty paid. This finding has completed the review lifecycle.
+          {onChain
+            ? "Bounty paid on-chain. Withdraw it from your profile."
+            : "Demo bounty paid. This finding has completed the review lifecycle."}
         </p>
       )}
 
