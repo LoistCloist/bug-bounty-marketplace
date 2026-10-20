@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import {
+  AnalysisStatusSchema,
   AuditorProfileSchema,
   BountySchema,
   ContractSchema,
@@ -30,6 +31,7 @@ const entities: Record<string, z.ZodType> = {
   PoCSubmission: PoCSubmissionSchema,
   Dispute: DisputeSchema,
   AuditorProfile: AuditorProfileSchema,
+  AnalysisStatus: AnalysisStatusSchema,
 };
 
 const outDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "schema");

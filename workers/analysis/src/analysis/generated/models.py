@@ -9,6 +9,25 @@ from pydantic import AwareDatetime, ConfigDict, Field
 
 from analysis.schema_base import BaseModel
 
+
+class Status(StrEnum):
+    Queued = "Queued"
+    Running = "Running"
+    Done = "Done"
+    Failed = "Failed"
+
+
+class AnalysisStatus(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    contractId: Annotated[str, Field(min_length=1)]
+    status: Status
+    error: str | None
+    findingCount: Annotated[int, Field(ge=0, le=9007199254740991)]
+    updatedAt: AwareDatetime
+
+
 ClaimedContractId = Annotated[str, Field(min_length=1)]
 
 
@@ -35,7 +54,7 @@ class Bounty(BaseModel):
     deadline: AwareDatetime
 
 
-class Status(StrEnum):
+class Status1(StrEnum):
     Open = "Open"
     Claimed = "Claimed"
     Resolved = "Resolved"
@@ -52,7 +71,7 @@ class Contract(BaseModel):
     sourceHash: Annotated[str, Field(min_length=1)]
     sourceReference: Annotated[str, Field(min_length=1)]
     bountyId: Annotated[str, Field(min_length=1)]
-    status: Status
+    status: Status1
     createdAt: AwareDatetime
     deadline: AwareDatetime
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AnalysisStatusSchema,
   AuditorProfileSchema,
   BountySchema,
   CONTRACT_SOURCE_MAX_BYTES,
@@ -11,6 +12,9 @@ import {
   FindingSchema,
   FindingStatusSchema,
   PoCSubmissionSchema,
+  POC_SOURCE_MAX_BYTES,
+  PocSourceFilenameSchema,
+  PocSourceSizeSchema,
 } from "../index";
 
 const now = "2026-09-30T12:00:00.000Z";
@@ -260,5 +264,53 @@ describe("AuditorProfileSchema", () => {
 
   it("rejects a malformed address", () => {
     expect(AuditorProfileSchema.safeParse({ ...valid, address: "0x123" }).success).toBe(false);
+  });
+});
+
+describe("AnalysisStatusSchema", () => {
+  const valid = {
+    contractId: "contract_1",
+    status: "Failed",
+    error: "ParserError: Expected ';'",
+    findingCount: 0,
+    updatedAt: now,
+  };
+
+  it("accepts a failed analysis with its error", () => {
+    expect(AnalysisStatusSchema.parse(valid)).toEqual(valid);
+  });
+
+  it("accepts a running analysis with no error", () => {
+    expect(AnalysisStatusSchema.safeParse({ ...valid, status: "Running", error: null }).success).toBe(true);
+  });
+
+  it("rejects a negative finding count", () => {
+    expect(AnalysisStatusSchema.safeParse({ ...valid, findingCount: -1 }).success).toBe(false);
+  });
+
+  it("rejects an unknown status", () => {
+    expect(AnalysisStatusSchema.safeParse({ ...valid, status: "Pending" }).success).toBe(false);
+  });
+});
+
+describe("PoC upload limits", () => {
+  it("caps PoC files at 100 KB", () => {
+    expect(POC_SOURCE_MAX_BYTES).toBe(102_400);
+    expect(PocSourceSizeSchema.safeParse(102_400).success).toBe(true);
+    const tooBig = PocSourceSizeSchema.safeParse(102_401);
+    expect(tooBig.success).toBe(false);
+    expect(tooBig.error?.issues[0]?.message).toBe("PoC file exceeds the 100 KB limit");
+  });
+
+  it("rejects an empty PoC file", () => {
+    expect(PocSourceSizeSchema.safeParse(0).success).toBe(false);
+  });
+
+  it("only accepts .t.sol filenames", () => {
+    expect(PocSourceFilenameSchema.safeParse("Exploit.t.sol").success).toBe(true);
+    expect(PocSourceFilenameSchema.safeParse("Exploit.T.SOL").success).toBe(true);
+    const plain = PocSourceFilenameSchema.safeParse("Exploit.sol");
+    expect(plain.success).toBe(false);
+    expect(plain.error?.issues[0]?.message).toBe("Filename must end in .t.sol");
   });
 });
