@@ -198,6 +198,27 @@ describe("runOnce", () => {
     expect(findingStatus.statuses.get(FINDING_API_ID)).toBe("Paid");
   });
 
+  it("returns a lapsed dispute to Verified via the auditor-won unfreeze", async () => {
+    // DisputeResolution.lapse unfreezes in the auditor's favour, then emits DisputeLapsed.
+    const logs = [
+      verifiedLog(2n, 0),
+      makeLog(bountyEscrowAbi, "Frozen", { contractId: CONTRACT_KEY, findingId: FINDING_KEY }, spot(3n, 0)),
+      makeLog(
+        bountyEscrowAbi,
+        "Unfrozen",
+        { contractId: CONTRACT_KEY, findingId: FINDING_KEY, auditorWon: true, verifiedAt: 0n },
+        spot(4n, 0),
+      ),
+      makeLog(disputeResolutionAbi, "DisputeLapsed", { key: DISPUTE_KEY }, { ...spot(4n, 1), address: DISPUTES }),
+    ];
+    const { options, findingStatus } = setup(10n, logs);
+
+    await runOnce(options);
+
+    expect(findingStatus.calls.map((c) => c.status)).toEqual(["Verified", "Disputed", "Verified"]);
+    expect(findingStatus.statuses.get(FINDING_API_ID)).toBe("Verified");
+  });
+
   it("ignores events that do not change status, without throwing", async () => {
     const logs = [
       makeLog(
