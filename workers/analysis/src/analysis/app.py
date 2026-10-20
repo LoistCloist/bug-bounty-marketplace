@@ -1,16 +1,65 @@
-"""HTTP entrypoint for the analysis worker.
+"""HTTP entrypoint for the analysis service.
 
-Only a skeleton for now: `/health` is live and `/analyze` is a stub that
-returns 501 until the Slither + LLM pipeline lands.
+- `GET /health`: liveness.
+- `POST /analyze`: stateless Slither + LLM analysis of one source file.
+- When `DATABASE_URL` is set, a background thread also runs the job poller
+  (see worker.py), which analyses contracts the API has queued and writes
+  their findings to Postgres.
 """
+
+import logging
+import os
+import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from analysis import __version__
+from analysis.config import Settings
+from analysis.findings import parse_detectors, severity_for
+from analysis.llm import explanations_for, make_explainer
+from analysis.pgsafe import without_nul
+from analysis.slither_runner import SlitherError, run_slither
+from analysis.solc import UnsupportedSolcError, pick_solc
+from analysis.worker import load_dotenv
+from analysis.worker import run as run_worker
 
-app = FastAPI(title="bbm-analysis", version=__version__)
+log = logging.getLogger("analysis.app")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Local convenience: pick up workers/analysis/.env (e.g. LLM_API_KEY).
+    if os.environ.get("ANALYSIS_LOAD_DOTENV", "1") != "0":
+        load_dotenv(Settings.dotenv_path(), os.environ)
+    settings = Settings.from_env()
+    app.state.settings = settings
+    app.state.explainer = make_explainer(settings)
+    app.state.worker = None
+    stop = threading.Event()
+    if settings.database_url and settings.source_storage_dir:
+        app.state.worker = threading.Thread(
+            target=run_worker,
+            args=(settings, stop, app.state.explainer),
+            name="job-poller",
+            daemon=True,
+        )
+        app.state.worker.start()
+    else:
+        log.info("job poller off: set DATABASE_URL and SOURCE_STORAGE_DIR to enable it")
+    try:
+        yield
+    finally:
+        stop.set()
+        if app.state.worker is not None:
+            app.state.worker.join(timeout=10)
+
+
+app = FastAPI(title="bbm-analysis", version=__version__, lifespan=lifespan)
 
 
 class AnalyzeRequest(BaseModel):
@@ -27,20 +76,35 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/analyze", status_code=501)
-def analyze(request: AnalyzeRequest) -> JSONResponse:
-    # TODO(analysis-pipeline): replace this stub with the real flow:
-    #   1. Write `request.source` to an isolated temp dir and run Slither in a
-    #      sandbox (no network, CPU/memory/time limits, pinned solc via
-    #      solc-select).
-    #   2. Map each Slither detector result to the shared `Finding` schema
-    #      (analysis.generated.models.Finding): severity from Slither impact,
-    #      `slitherDetector` = detector id, `rawOutputReference` = pointer to the
-    #      stored raw JSON output, initial status `Flagged`.
-    #   3. Ask an LLM for a plain-English `llmExplanation` per finding. This is
-    #      advisory only: it must never change a finding's status or payout.
-    del request
-    return JSONResponse(
-        status_code=501,
-        content={"detail": "not implemented: slither + LLM pipeline lands in a later branch"},
-    )
+@app.post("/analyze", response_model=None)
+def analyze(request: AnalyzeRequest) -> dict[str, Any] | JSONResponse:
+    """Runs Slither on `source` and explains each finding. Nothing is stored.
+    Unsupported pragmas and compile errors answer 422 with the reason."""
+    settings: Settings = app.state.settings
+    source = request.source.encode("utf-8")
+    try:
+        solc_version = pick_solc(source, settings.supported_solc)
+        report = run_slither(source, f"{request.contractId}.sol", solc_version)
+    except (UnsupportedSolcError, SlitherError) as err:
+        return JSONResponse(status_code=422, content={"detail": str(err)})
+
+    detectors = parse_detectors(report)
+    try:
+        explained = app.state.explainer.explain(request.source, detectors) if detectors else {}
+    except Exception:  # advisory only
+        log.exception("explainer raised; falling back to Slither text")
+        explained = {}
+    findings = [
+        {
+            "severity": severity_for(d.impact),
+            "slitherDetector": d.check,
+            "confidence": d.confidence,
+            "llmExplanation": without_nul(text),
+            "explanationSource": text_source,
+            "rawOutput": without_nul(d.raw),
+        }
+        for d, (text, text_source) in zip(
+            detectors, explanations_for(detectors, explained), strict=True
+        )
+    ]
+    return {"contractId": request.contractId, "solcVersion": solc_version, "findings": findings}
