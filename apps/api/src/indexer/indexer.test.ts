@@ -4,7 +4,8 @@ import { bountyEscrowAbi, disputeResolutionAbi } from "@bbm/shared";
 import { loadChainConfig } from "../chain/config.js";
 import { onchainId } from "../chain/ids.js";
 import type { ChainLog } from "./events.js";
-import { MemoryFindingStatusWriter } from "./finding-status.js";
+import { MemoryFindingStatusStore } from "../status/memory-finding-status.js";
+import type { FindingStatus } from "@bbm/shared";
 import { runOnce, startEventIndexer, type EventIndexerOptions, type IndexerChainClient } from "./indexer.js";
 import { MemoryIndexerRepository } from "./memory-repository.js";
 
@@ -17,6 +18,18 @@ const DISPUTE_KEY = `0x${"d1".repeat(32)}` as Hex;
 const FINDING_API_ID = "finding_1";
 const FINDING_KEY = onchainId(FINDING_API_ID);
 const AT = new Date("2026-10-20T12:00:00Z");
+
+/** Store that records every write so tests can assert on the sequence. */
+class RecordingFindingStatus extends MemoryFindingStatusStore {
+  readonly calls: { findingId: string; status: FindingStatus; at: string }[] = [];
+  readonly statuses = new Map<string, FindingStatus>();
+
+  override async setFindingStatus(findingId: string, status: FindingStatus, changedAt: string): Promise<void> {
+    this.calls.push({ findingId, status, at: changedAt });
+    this.statuses.set(findingId, status);
+    await super.setFindingStatus(findingId, status, changedAt);
+  }
+}
 const CHAIN_ID = 31337;
 
 type LogSpot = Pick<ChainLog, "address" | "blockNumber" | "transactionHash" | "logIndex">;
@@ -66,7 +79,8 @@ function fakeChain(head: bigint, logs: ChainLog[]) {
 function setup(head: bigint, logs: ChainLog[], overrides: Partial<EventIndexerOptions> = {}) {
   const chain = fakeChain(head, logs);
   const repository = new MemoryIndexerRepository();
-  const findingStatus = new MemoryFindingStatusWriter();
+  const findingStatus = new RecordingFindingStatus();
+  findingStatus.add(FINDING_API_ID, "Submitted", AT.toISOString());
   const options: EventIndexerOptions = {
     chainId: CHAIN_ID,
     client: chain.client,
@@ -95,7 +109,7 @@ describe("runOnce", () => {
     const result = await runOnce(options);
 
     expect(findingStatus.statuses.get(FINDING_API_ID)).toBe("Verified");
-    expect(findingStatus.calls).toEqual([{ findingId: FINDING_API_ID, status: "Verified", at: AT }]);
+    expect(findingStatus.calls).toEqual([{ findingId: FINDING_API_ID, status: "Verified", at: AT.toISOString() }]);
     expect(result).toMatchObject({ fromBlock: 0n, toBlock: 10n, applied: 1, ignored: 0 });
   });
 
@@ -149,8 +163,9 @@ describe("runOnce", () => {
     ]);
   });
 
-  it("applies the status sequence Frozen, then Unfrozen with the auditor losing", async () => {
+  it("applies the status sequence Verified, Frozen, then Unfrozen with the auditor losing", async () => {
     const logs = [
+      verifiedLog(2n, 0),
       makeLog(bountyEscrowAbi, "Frozen", { contractId: CONTRACT_KEY, findingId: FINDING_KEY }, spot(3n, 0)),
       makeLog(
         bountyEscrowAbi,
@@ -163,11 +178,12 @@ describe("runOnce", () => {
 
     await runOnce(options);
 
-    expect(findingStatus.calls.map((c) => c.status)).toEqual(["Disputed", "Rejected"]);
+    expect(findingStatus.calls.map((c) => c.status)).toEqual(["Verified", "Disputed", "Rejected"]);
   });
 
   it("maps PayoutCredited to Paid", async () => {
     const logs = [
+      verifiedLog(2n, 0),
       makeLog(
         bountyEscrowAbi,
         "PayoutCredited",
@@ -253,7 +269,7 @@ describe("startEventIndexer", () => {
     const handle = startEventIndexer({
       config,
       repository: new MemoryIndexerRepository(),
-      findingStatus: new MemoryFindingStatusWriter(),
+      findingStatus: new RecordingFindingStatus(),
       listFindingIds: async () => [],
       createClient,
     });

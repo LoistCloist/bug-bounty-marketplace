@@ -1,29 +1,28 @@
 import type { FindingStatus } from "@bbm/shared";
+import {
+  applyFindingTransition,
+  FindingNotFoundError,
+  type FindingStatusReader,
+  type FindingStatusWriter,
+} from "../status/finding-writer.js";
+
+/** What the indexer needs from the finding store: read to validate, write to apply. */
+export type IndexerFindingStore = FindingStatusReader & FindingStatusWriter;
 
 /**
- * The one thing the indexer needs from the finding state machine. The state
- * machine (plan item 7) implements this. Implementations should be idempotent
- * (setting the status a finding already has is a no-op), because the indexer
- * may call it again for an event whose "applied" row was not yet written when
- * the process stopped.
+ * Applies a status change implied by an on-chain event through the status
+ * machine, so illegal moves are rejected the same way they are for routes.
+ * Setting the status a finding already has is a no-op: the indexer can replay
+ * a log after a crash between the status write and the applied marker.
  */
-export interface FindingStatusWriter {
-  setStatus(findingId: string, status: FindingStatus, at: Date): Promise<void>;
-}
-
-export interface FindingStatusChange {
-  findingId: string;
-  status: FindingStatus;
-  at: Date;
-}
-
-/** Process-local writer for tests and in-memory runs. Records every call. */
-export class MemoryFindingStatusWriter implements FindingStatusWriter {
-  readonly statuses = new Map<string, FindingStatus>();
-  readonly calls: FindingStatusChange[] = [];
-
-  async setStatus(findingId: string, status: FindingStatus, at: Date): Promise<void> {
-    this.calls.push({ findingId, status, at });
-    this.statuses.set(findingId, status);
-  }
+export async function applyIndexedStatus(
+  store: IndexerFindingStore,
+  findingId: string,
+  next: FindingStatus,
+  at: Date,
+): Promise<void> {
+  const current = await store.getFindingStatus(findingId);
+  if (current === null) throw new FindingNotFoundError(findingId);
+  if (current === next) return;
+  await applyFindingTransition(store, findingId, next, at.toISOString());
 }

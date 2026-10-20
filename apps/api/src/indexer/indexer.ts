@@ -3,7 +3,7 @@ import { bountyEscrowAbi, disputeResolutionAbi } from "@bbm/shared";
 import type { ChainConfig } from "../chain/config.js";
 import { onchainId } from "../chain/ids.js";
 import { decodeChainLog, statusEffectOf, type AbiByAddress, type ChainLog } from "./events.js";
-import type { FindingStatusWriter } from "./finding-status.js";
+import { applyIndexedStatus, type IndexerFindingStore } from "./finding-status.js";
 import type { IndexerRepository } from "./repository.js";
 
 /** The slice of a viem PublicClient the indexer reads from. */
@@ -14,7 +14,7 @@ export interface EventIndexerOptions {
   client: IndexerChainClient;
   contracts: { bountyEscrow: Address; disputeResolution: Address };
   repository: IndexerRepository;
-  findingStatus: FindingStatusWriter;
+  findingStatus: IndexerFindingStore;
   /** Every API finding id. Read at the start of each run, so new findings
    * resolve without a restart. */
   listFindingIds: () => Promise<string[]>;
@@ -118,9 +118,9 @@ export async function runOnce(options: EventIndexerOptions): Promise<RunResult> 
     if (findingId === undefined) return "ignored";
 
     // Status first, then the applied marker. A crash between the two replays
-    // this log, so FindingStatusWriter.setStatus must be idempotent.
+    // this log, so applyIndexedStatus must tolerate re-applying the same status.
     const at = now();
-    await findingStatus.setStatus(findingId, effect.status, at);
+    await applyIndexedStatus(findingStatus, findingId, effect.status, at);
     await repository.markApplied({ ...key, eventName: decoded.eventName, appliedAt: at });
     return "applied";
   }
@@ -134,7 +134,7 @@ export interface EventIndexerHandle {
 export interface StartEventIndexerOptions {
   config: ChainConfig | null;
   repository: IndexerRepository;
-  findingStatus: FindingStatusWriter;
+  findingStatus: IndexerFindingStore;
   listFindingIds: () => Promise<string[]>;
   startBlock?: bigint;
   batchSize?: bigint;
