@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { buildApp } from "./app.js";
-import { buildAuditorStakingPort } from "./chain/clients.js";
+import { buildAuditorStakingPort, createAuditorStakingFromConfig } from "./chain/clients.js";
+import { loadChainConfig } from "./chain/config.js";
 import { PgContractRepository } from "./contracts/pg-repository.js";
 import { PgPipelineRepository } from "./pipeline/pg-repository.js";
 import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
@@ -19,14 +20,24 @@ const pool = databaseUrl
   ? new Pool({ connectionString: databaseUrl, max: parseIntEnv(process.env.PG_POOL_MAX, 5) })
   : undefined;
 
-// CHAIN_RPC_URL selects the chain. The on-chain lock on claim is off unless
-// CLAIM_LOCK_ENABLED=true, because a lock with no unlock (plan item 6) can
-// strand an auditor's stake. buildAuditorStakingPort applies that decision.
+// CHAIN_RPC_URL selects the chain. Without it the PoC stake gate is skipped
+// (and logged on every upload) and claims stay local. The on-chain lock on
+// claim is off unless CLAIM_LOCK_ENABLED=true, because a lock with no unlock
+// (plan item 6) can strand an auditor's stake. buildAuditorStakingPort applies
+// that decision.
+const chainConfig = loadChainConfig(process.env);
+if (!chainConfig) {
+  console.warn("@bbm/api CHAIN_RPC_URL is unset: PoC uploads skip the auditor stake check");
+}
+// The port is only constructed when a chain is configured; no RPC call is made here.
+const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
 const app = buildApp({
   repository: pool ? new PgContractRepository(pool) : undefined,
   pipeline: pool ? new PgPipelineRepository(pool) : undefined,
   storage: storageDir ? new LocalSourceStorage(storageDir) : new MemorySourceStorage(),
   auditorStaking: buildAuditorStakingPort(process.env),
+  // The PoC stake gate reads stake regardless of CLAIM_LOCK_ENABLED.
+  stakeReader: stakingPort,
 });
 const port = Number(process.env.PORT ?? 3001);
 
