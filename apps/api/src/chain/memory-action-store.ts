@@ -38,7 +38,9 @@ export class MemoryChainActionStore implements ChainActionStore {
     }
     if (status === "Paid") {
       const stored = this.store.contracts.get(record.contractId);
-      if (stored) stored.contract = { ...stored.contract, status: "Resolved" };
+      if (stored && (stored.contract.status === "Open" || stored.contract.status === "Claimed")) {
+        stored.contract = { ...stored.contract, status: "Resolved" };
+      }
     }
   }
 

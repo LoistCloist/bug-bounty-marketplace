@@ -47,7 +47,7 @@ export class PgChainActionStore implements ChainActionStore {
       );
       if (result.rowCount === 1) {
         if (status === "Paid") {
-          await client.query("UPDATE contracts SET status = 'Resolved' WHERE id = $1", [
+          await client.query("UPDATE contracts SET status = 'Resolved' WHERE id = $1 AND status IN ('Open', 'Claimed')", [
             result.rows[0]!.contract_id,
           ]);
         }

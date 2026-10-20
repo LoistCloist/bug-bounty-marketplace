@@ -3,6 +3,8 @@
 Passed → PoC Passed, finding Verified, challenge window opens.
 Failed → PoC Failed, finding Rejected.
 Sandbox outage → retried; the finding stays Submitted.
+With CHAIN_ENABLED only the PoC's result is recorded: the API applies the
+verdict on-chain and then moves the finding.
 """
 
 from __future__ import annotations

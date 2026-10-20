@@ -34,7 +34,9 @@ export interface EventIndexerOptions {
   pendingMaxAgeBlocks?: bigint;
   now?: () => Date;
   /** Called after an event's status is applied (e.g. to release a claim lock
-   * once a dispute resolves). A failure is logged and does not stop indexing. */
+   * once a dispute resolves). At most once per event: it runs after the event
+   * is marked applied, and a failure is logged, not retried (a claim lock left
+   * held is released by the expiry sweep). */
   onStatusApplied?: (findingId: string, status: FindingStatus, eventName: string) => Promise<void>;
 }
 
@@ -186,7 +188,7 @@ async function runLocked(options: EventIndexerOptions): Promise<RunResult> {
     // this log, so applyIndexedStatus must tolerate re-applying the same status.
     const at = now();
     try {
-      await applyIndexedStatus(findingStatus, findingId, effect.status, at);
+      await applyIndexedStatus(findingStatus, findingId, effect.status, at, effect.from);
     } catch (err) {
       // The API listed the finding but cannot read it yet: keep the log.
       if (err instanceof FindingNotFoundError) {

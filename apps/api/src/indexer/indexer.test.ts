@@ -236,6 +236,15 @@ describe("runOnce", () => {
     expect(findingStatus.statuses.get(FINDING_API_ID)).toBe("Verified");
   });
 
+  it("does not let a replayed FindingVerified undo a dispute", async () => {
+    const { options, findingStatus } = setup(10n, [verifiedLog(2n, 0)]);
+    findingStatus.add(FINDING_API_ID, "Disputed", AT.toISOString());
+
+    await runOnce(options);
+
+    expect(await findingStatus.getFindingStatus(FINDING_API_ID)).toBe("Disputed");
+  });
+
   it("maps PayoutCredited to Paid", async () => {
     const logs = [
       verifiedLog(2n, 0),

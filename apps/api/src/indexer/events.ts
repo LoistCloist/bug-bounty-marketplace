@@ -48,6 +48,10 @@ export function decodeChainLog(log: ChainLog, abiByAddress: AbiByAddress): Decod
 export interface StatusEffect {
   onchainFindingId: Hex;
   status: FindingStatus;
+  /** When set, the move applies only from these statuses: a replayed
+   * FindingVerified must not undo a later dispute (Disputed → Verified is
+   * legal, but only Unfrozen may make it). */
+  from?: readonly FindingStatus[];
 }
 
 /**
@@ -67,7 +71,7 @@ export function statusEffectOf(decoded: DecodedLog): StatusEffect | null {
   const { eventName, args } = decoded;
   switch (eventName) {
     case "FindingVerified":
-      return { onchainFindingId: args.findingId as Hex, status: "Verified" };
+      return { onchainFindingId: args.findingId as Hex, status: "Verified", from: ["Submitted"] };
     case "Frozen":
       return { onchainFindingId: args.findingId as Hex, status: "Disputed" };
     case "Unfrozen":

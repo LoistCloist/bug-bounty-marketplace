@@ -123,6 +123,24 @@ for (const [name, make, skip] of [
       expect(f.window).toBe(new Date(Date.parse(AT) + WINDOW_SECONDS * 1000).toISOString());
     });
 
+    it("Disputed to Verified opens a new challenge window", async () => {
+      const { findingId } = await seeded("Disputed");
+      const later = "2026-10-20T13:00:00.000Z";
+      await h.store.setFindingStatus(findingId, "Verified", later);
+      expect((await h.finding(findingId)).window).toBe(
+        new Date(Date.parse(later) + WINDOW_SECONDS * 1000).toISOString(),
+      );
+    });
+
+    it("writing Verified again leaves the window unchanged", async () => {
+      const { findingId } = await seeded("Submitted");
+      await h.store.setFindingStatus(findingId, "Verified", AT);
+      await h.store.setFindingStatus(findingId, "Verified", "2026-10-20T15:00:00.000Z");
+      expect((await h.finding(findingId)).window).toBe(
+        new Date(Date.parse(AT) + WINDOW_SECONDS * 1000).toISOString(),
+      );
+    });
+
     it("Paid resolves the finding's contract", async () => {
       const { contractId, findingId } = await seeded("Verified");
       await h.store.setFindingStatus(findingId, "Paid", AT);

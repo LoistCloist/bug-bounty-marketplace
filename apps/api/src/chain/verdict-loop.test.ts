@@ -195,3 +195,40 @@ describe("runVerdictsOnce", () => {
     expect(store.findings.get(findingId)?.status).toBe("Verified");
   });
 });
+
+describe("runVerdictsOnce racing the indexer", () => {
+  it("succeeds when the indexer sets Verified while the chain write is in flight", async () => {
+    const { store, pipeline, seed } = setup();
+    const { findingId } = await seed("Passed");
+    let verified: Hex = ZERO;
+    let submissions = 0n;
+    const chainStore = new MemoryChainActionStore(store);
+    const bountyEscrow = {
+      recordSubmission: vi.fn(async () => {
+        submissions += 1n;
+        return HASH;
+      }),
+      recordVerification: vi.fn(async (_c: Hex, finding: Hex) => {
+        verified = finding;
+        // The indexer applies FindingVerified before applyVerdict writes.
+        await chainStore.setFindingStatus(findingId, "Verified", T0);
+        return HASH;
+      }),
+      payout: vi.fn(async () => HASH),
+      pendingPayouts: vi.fn(async () => 0n),
+      readBounty: vi.fn(
+        async (): Promise<OnchainBounty> => ({
+          state: 1,
+          submissionCount: submissions,
+          verifiedFinding: verified,
+          verifiedAuditor: AUDITOR,
+          frozen: false,
+        }),
+      ),
+    } satisfies BountyEscrowPort;
+    const chainActions = createChainActions({ store: chainStore, bountyEscrow, claimLockEnabled: false, onError: () => {} });
+
+    expect(await runVerdictsOnce({ pipeline, chainActions, onError: () => {} })).toEqual({ applied: 1, failed: 0 });
+    expect(store.findings.get(findingId)?.statusHistory.filter((h) => h.status === "Verified")).toHaveLength(1);
+  });
+});

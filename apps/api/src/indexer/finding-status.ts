@@ -5,6 +5,7 @@ import {
   type FindingStatusReader,
   type FindingStatusWriter,
 } from "../status/finding-writer.js";
+import { InvalidTransitionError } from "../status/transitions.js";
 
 /** What the indexer needs from the finding store: read to validate, write to apply. */
 export type IndexerFindingStore = FindingStatusReader & FindingStatusWriter;
@@ -20,9 +21,11 @@ export async function applyIndexedStatus(
   findingId: string,
   next: FindingStatus,
   at: Date,
+  from?: readonly FindingStatus[],
 ): Promise<void> {
   const current = await store.getFindingStatus(findingId);
   if (current === null) throw new FindingNotFoundError(findingId);
   if (current === next) return;
+  if (from && !from.includes(current)) throw new InvalidTransitionError("finding", current, next);
   await applyFindingTransition(store, findingId, next, at.toISOString());
 }
