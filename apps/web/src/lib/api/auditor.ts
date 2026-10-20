@@ -46,7 +46,8 @@ export function getProfile(auditorId: string): Promise<AuditorProfile> {
 }
 
 /** POST /api/auditor/stake - adds to the auditor's posted stake. */
-export function postStake(input: { auditorId: string; amount: number }): Promise<AuditorProfile> {
+/** `amount` is wei as a decimal string. */
+export function postStake(input: { auditorId: string; amount: string }): Promise<AuditorProfile> {
   return postJson("/api/auditor/stake", input, AuditorProfileSchema);
 }
 

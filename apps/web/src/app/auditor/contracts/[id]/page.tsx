@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { developerApi, auditorApi } from "@/lib/api";
 import { SEED_AUDITOR_ID } from "@/mocks/db";
 import { ClaimCountdown } from "../../_components/ClaimCountdown";
-import { StakeGate, REQUIRED_STAKE } from "../../_components/StakeGate";
+import { StakeGate, isStakeMet } from "../../_components/StakeGate";
 import { FindingCard } from "../../_components/FindingCard";
 
 /** True while a finding is still awaiting an auditor action or sandbox
@@ -70,7 +70,7 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   const contract = contractQuery.data;
   const findings = findingsQuery.data ?? [];
   const profile = profileQuery.data;
-  const stakeMet = profile.stake >= REQUIRED_STAKE;
+  const stakeMet = isStakeMet(profile.stake);
 
   // claimExpiresAt is set per-finding at claim time (see
   // mocks/db/auditors.ts's claimContract) rather than on the contract

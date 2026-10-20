@@ -4,6 +4,7 @@ import { db } from "./store";
 import { nextId } from "./ids";
 import { MockApiError } from "./errors";
 import { findFindingById, findContractById } from "./contracts";
+import { ethToWei } from "../../lib/money";
 
 export function listDisputes(filter?: { ruling?: DisputeRuling }): Dispute[] {
   if (filter?.ruling) {
@@ -73,7 +74,9 @@ export function ruleOnDispute(
       finding.statusHistory.push({ status: "Rejected", changedAt: dispute.ruledAt });
       if (auditor) {
         auditor.reputation -= 1;
-        auditor.stake = Math.max(0, auditor.stake - 100);
+        const slash = BigInt(ethToWei("100"));
+        const stake = BigInt(auditor.stake);
+        auditor.stake = (stake > slash ? stake - slash : 0n).toString();
       }
     }
   }

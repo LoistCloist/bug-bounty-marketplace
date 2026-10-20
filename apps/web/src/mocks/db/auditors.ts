@@ -1,4 +1,5 @@
-import type { AuditorProfile, Contract, Finding, PoCSubmission } from "@bbm/shared";
+import { compareWei, PositiveWeiSchema, type AuditorProfile, type Contract, type Finding, type PoCSubmission, type Wei } from "@bbm/shared";
+import { ethToWei } from "../../lib/money";
 import { MOCK_ADDRESSES } from "../../lib/addresses";
 import { db } from "./store";
 import { nextId } from "./ids";
@@ -24,7 +25,7 @@ export function findAuditorById(auditorId: string): AuditorProfile | undefined {
 }
 
 export interface QueueItem extends Contract {
-  bounty: { amount: number; currency: string };
+  bounty: { amount: Wei; currency: string };
 }
 
 export function listQueue(sort?: "deadline" | "bounty" | "newest"): QueueItem[] {
@@ -53,12 +54,12 @@ export function listQueue(sort?: "deadline" | "bounty" | "newest"): QueueItem[] 
   );
   const items: QueueItem[] = open.map((c) => {
     const bounty = db.bounties.find((b) => b.contractId === c.id);
-    return { ...c, bounty: { amount: bounty?.amount ?? 0, currency: bounty?.currency ?? "ETH" } };
+    return { ...c, bounty: { amount: bounty?.amount ?? "0", currency: bounty?.currency ?? "ETH" } };
   });
   if (sort === "deadline") {
     items.sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime());
   } else if (sort === "bounty") {
-    items.sort((a, b) => b.bounty.amount - a.bounty.amount);
+    items.sort((a, b) => compareWei(b.bounty.amount, a.bounty.amount));
   } else if (sort === "newest") {
     items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
@@ -90,12 +91,12 @@ export function claimContract(contractId: string, auditorId: string): Contract {
   return contract;
 }
 
-export function postStake(auditorId: string, amount: number): AuditorProfile {
+export function postStake(auditorId: string, amount: string): AuditorProfile {
   const auditor = findAuditorById(auditorId);
   if (!auditor) throw new MockApiError(404, `Auditor ${auditorId} not found`);
-  if (!Number.isFinite(amount) || amount <= 0)
-    throw new MockApiError(400, "Stake amount must be positive");
-  auditor.stake += amount;
+  if (!PositiveWeiSchema.safeParse(amount).success)
+    throw new MockApiError(400, "Stake amount must be a positive wei amount");
+  auditor.stake = (BigInt(auditor.stake) + BigInt(amount)).toString();
   return auditor;
 }
 
@@ -137,7 +138,7 @@ export function submitPoc(
     new Date(finding.claimExpiresAt).getTime() <= Date.now()
   )
     throw new MockApiError(409, "An active claim is required");
-  if ((findAuditorById(auditorId)?.stake ?? 0) < 10_000)
+  if (compareWei(findAuditorById(auditorId)?.stake ?? "0", ethToWei("10000")) < 0)
     throw new MockApiError(400, "Post the required demo stake before submitting a PoC");
   const contract = findContractById(finding.contractId);
   if (
@@ -180,7 +181,7 @@ export function seedAuditorsArea(): void {
   db.auditorProfiles.push({
     id: SEED_AUDITOR_ID,
     address: MOCK_ADDRESSES.auditor,
-    stake: 5_000,
+    stake: ethToWei("5000"),
     reputation: 12,
     claimedContractIds: ["contract_2", "contract_3"],
   });

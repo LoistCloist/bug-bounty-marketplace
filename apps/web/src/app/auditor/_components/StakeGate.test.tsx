@@ -3,7 +3,8 @@ import React, { type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { StakeGate, REQUIRED_STAKE } from "./StakeGate";
+import { StakeGate, REQUIRED_STAKE, REQUIRED_STAKE_WEI } from "./StakeGate";
+import { ethToWei } from "@/lib/money";
 
 function withQueryClient(children: ReactNode) {
   const queryClient = new QueryClient();
@@ -15,7 +16,7 @@ describe("StakeGate", () => {
     render(
       withQueryClient(
         <StakeGate
-          profile={{ id: "auditor_1", address: "0xabc", stake: 5_000, reputation: 12, claimedContractIds: [] }}
+          profile={{ id: "auditor_1", address: "0xabc", stake: ethToWei("5000"), reputation: 12, claimedContractIds: [] }}
           auditorId="auditor_1"
           onStaked={vi.fn()}
         />,
@@ -34,7 +35,7 @@ describe("StakeGate", () => {
           profile={{
             id: "auditor_1",
             address: "0xabc",
-            stake: REQUIRED_STAKE,
+            stake: REQUIRED_STAKE_WEI,
             reputation: 12,
             claimedContractIds: [],
           }}
@@ -54,7 +55,7 @@ describe("StakeGate", () => {
     render(
       withQueryClient(
         <StakeGate
-          profile={{ id: "auditor_1", address: "0xabc", stake: 5_000, reputation: 12, claimedContractIds: [] }}
+          profile={{ id: "auditor_1", address: "0xabc", stake: ethToWei("5000"), reputation: 12, claimedContractIds: [] }}
           auditorId="auditor_1"
           onStaked={onStaked}
         />,

@@ -58,9 +58,9 @@ export const auditorHandlers = [
       auditorId?: string;
       amount?: number;
     };
-    if (!body.auditorId || typeof body.amount !== "number") {
+    if (!body.auditorId || typeof body.amount !== "string") {
       return HttpResponse.json(
-        { error: "auditorId and a numeric amount are required" },
+        { error: "auditorId and a wei amount string are required" },
         { status: 400 },
       );
     }

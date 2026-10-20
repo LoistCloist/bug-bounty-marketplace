@@ -5,7 +5,8 @@ import { getJson, postForm, postJson, toQueryString } from "./http";
 export interface SubmitContractInput {
   file: File;
   developerAddress: string;
-  bountyAmount: number;
+  /** Wei as a decimal string. */
+  bountyAmount: string;
   currency?: string;
   deadline: string;
 }
@@ -17,7 +18,7 @@ export function submitContract(input: SubmitContractInput): Promise<Contract> {
   const form = new FormData();
   form.set("file", input.file);
   form.set("developerAddress", input.developerAddress);
-  form.set("bountyAmount", String(input.bountyAmount));
+  form.set("bountyAmount", input.bountyAmount);
   form.set("currency", input.currency ?? "ETH");
   form.set("deadline", input.deadline);
   return postForm("/api/contracts", form, ContractSchema);
