@@ -285,6 +285,7 @@ export function describeRepositories(
       const { contract } = await insert();
       const finding = makeFinding(contract.id);
       await h.seedFinding(finding);
+      await h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0);
       const { poc, job } = makePoc(finding.id);
 
       expect(
@@ -304,6 +305,7 @@ export function describeRepositories(
       const { contract } = await insert();
       const finding = makeFinding(contract.id);
       await h.seedFinding(finding);
+      await h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0);
       const first = makePoc(finding.id);
       await h.pipeline.submitPoc({ ...first, findingId: finding.id, now: first.poc.submittedAt });
 
@@ -318,5 +320,28 @@ export function describeRepositories(
       expect(await h.jobsFor(second.poc.id)).toEqual([]);
       expect((await h.pipeline.findFinding(finding.id, T0))?.statusHistory).toHaveLength(2);
     });
+
+    // The claim is re-checked inside the same transaction as the status
+    // change, so a claim that lapses (or changes hands) mid-request loses.
+    for (const [label, claimant, expiresAt] of [
+      ["no claim", null, null],
+      ["another auditor's claim", "auditor_2", minutes(10)],
+      ["an expired claim", "auditor_1", minutes(1)],
+    ] as const) {
+      it(`submitPoc with ${label} is no_claim and writes nothing`, async () => {
+        const { contract } = await insert();
+        const finding = makeFinding(contract.id);
+        await h.seedFinding(finding);
+        if (claimant && expiresAt) {
+          await h.contracts.claimContract(contract.id, claimant, expiresAt, T0);
+        }
+        const { poc, job } = makePoc(finding.id); // auditor_1, submitted at T0 + 1 min
+        expect(
+          await h.pipeline.submitPoc({ poc, job, findingId: finding.id, now: poc.submittedAt }),
+        ).toBe("no_claim");
+        expect(await h.jobsFor(poc.id)).toEqual([]);
+        expect((await h.pipeline.findFinding(finding.id, T0))?.status).toBe("Flagged");
+      });
+    }
   });
 }

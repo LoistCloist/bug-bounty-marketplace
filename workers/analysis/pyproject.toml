@@ -8,7 +8,17 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9,<3",
+    "psycopg[binary]>=3.2",
+    "openai>=1.50",
+    "httpx2>=2.15",
+    "semantic-version>=2.10",
+    "slither-analyzer>=0.10",
+    "solc-select>=1.0",
 ]
+
+[project.scripts]
+# The job poller on its own, without the HTTP service (the service also runs it).
+bbm-analysis-worker = "analysis.worker:main"
 
 [dependency-groups]
 dev = [
@@ -35,6 +45,16 @@ extend-exclude = ["src/analysis/generated"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# Tests embed verbatim tool output, which can run past the line limit.
+"tests/**" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--disable-socket --allow-unix-socket"
+# Sockets stay disabled except to loopback (--allow-hosts), which the DB tests
+# use for the local Postgres in DATABASE_URL.
+addopts = "--disable-socket --allow-unix-socket --allow-hosts=127.0.0.1,::1 -m 'not slither and not docker'"
+markers = [
+    "slither: runs the real Slither binary (needs solc-select versions installed)",
+    "docker: runs the real sandbox image (needs Docker and bbm-sandbox:latest)",
+]

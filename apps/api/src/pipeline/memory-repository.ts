@@ -97,9 +97,16 @@ export class MemoryPipelineRepository implements PipelineRepository {
     };
   }
 
-  async submitPoc({ poc, job, findingId, now }: NewPocRecord): Promise<"ok" | "not_flagged"> {
+  async submitPoc({
+    poc,
+    job,
+    findingId,
+    now,
+  }: NewPocRecord): Promise<"ok" | "not_flagged" | "no_claim"> {
     const record = this.store.findings.get(findingId);
     if (!record || record.status !== "Flagged") return "not_flagged";
+    const claim = this.store.activeClaim(record.contractId, new Date(now));
+    if (claim?.auditorId !== poc.auditorId) return "no_claim";
     record.status = "Submitted";
     record.statusHistory = [...record.statusHistory, { status: "Submitted", changedAt: now }];
     this.store.pocs.set(poc.id, { ...poc });

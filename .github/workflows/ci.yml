@@ -85,6 +85,8 @@ jobs:
             analysis:
               - 'workers/analysis/**'
               - 'packages/shared/schema/**'
+              # The worker's DB tests apply the API's migrations.
+              - 'apps/api/src/db/migrations/**'
               - '.github/workflows/ci.yml'
 
             # Anything that can change a container image or the compose
@@ -344,6 +346,25 @@ jobs:
     needs: changes
     if: needs.changes.outputs.analysis == 'true'
     runs-on: ubuntu-latest
+    # Postgres for the job-queue and analysis-job tests (they apply the API's
+    # migrations into a separate <db>_worker_test database).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bbm
+          POSTGRES_PASSWORD: bbm
+          POSTGRES_DB: bbm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bbm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # 127.0.0.1, not localhost: pytest-socket only allows loopback IPs.
+      DATABASE_URL: postgres://bbm:bbm@127.0.0.1:5432/bbm
     defaults:
       run:
         working-directory: workers/analysis
@@ -373,6 +394,12 @@ jobs:
         run: |
           uv run scripts/gen-types.sh
           git diff --exit-code -- src/analysis/generated
+
+      - name: Install solc versions
+        run: xargs -a src/analysis/solc-versions.txt -n1 uv run solc-select install
+
+      - name: Slither integration tests
+        run: uv run pytest -m slither -q
 
   # ---------------------------------------------------------------------
   # containers - lint every Dockerfile, build every image (BuildKit, GHA

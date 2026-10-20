@@ -137,6 +137,9 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       now: submittedAt,
       job: { id: `job_${randomUUID()}`, kind: "sandbox", subjectId: pocId, createdAt: submittedAt },
     });
+    if (outcome === "no_claim") {
+      return reply.code(403).send({ error: "You do not hold an active claim on this contract" });
+    }
     if (outcome === "not_flagged") {
       return reply.code(409).send({ error: "Finding is not Flagged" });
     }

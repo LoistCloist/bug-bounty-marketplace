@@ -58,6 +58,8 @@ export interface PipelineRepository {
   /** Status of the contract's latest analysis job, or null if it has none. */
   getAnalysisStatus(contractId: string): Promise<AnalysisStatus | null>;
   /** Moves a Flagged finding to Submitted and queues its PoC for the sandbox,
-   * atomically. Returns "not_flagged" (and writes nothing) otherwise. */
-  submitPoc(record: NewPocRecord): Promise<"ok" | "not_flagged">;
+   * atomically, if `poc.auditorId` still holds the contract's claim at `now`.
+   * Otherwise writes nothing and returns "no_claim" (claim missing, expired
+   * or someone else's) or "not_flagged" (finding no longer Flagged). */
+  submitPoc(record: NewPocRecord): Promise<"ok" | "not_flagged" | "no_claim">;
 }

@@ -1,0 +1,128 @@
+from pathlib import Path
+
+from analysis import worker as main
+from analysis.config import Settings
+from analysis.jobs import claim_next
+from analysis.storage import read_source
+
+from .conftest import insert_job
+
+
+def _settings(tmp_path, database_url):
+    return Settings.from_env({"DATABASE_URL": database_url, "SOURCE_STORAGE_DIR": str(tmp_path)})
+
+
+def test_handle_turns_an_unexpected_exception_into_a_retryable_fail(
+    pg_conn, tmp_path, monkeypatch, test_database_url
+):
+    insert_job(pg_conn, "analysis", "contract_a")
+    job = claim_next(pg_conn, 600, 3)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main, "run_analysis_job", boom)
+    main.handle(job, _settings(tmp_path, test_database_url), explainer=None)
+    row = pg_conn.execute("SELECT status, last_error FROM jobs WHERE id = %s", (job.id,)).fetchone()
+    assert (row["status"], row["last_error"]) == ("queued", "RuntimeError: boom")
+
+
+def test_load_dotenv_sets_missing_values_only(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("# comment\nA=1\nB = two words \nEMPTY=\nexport C=3\nnot a pair\n")
+    env = {"A": "keep"}
+    main.load_dotenv(env_file, env)
+    assert env == {"A": "keep", "B": "two words", "EMPTY": "", "C": "3"}
+
+
+def test_load_dotenv_ignores_a_missing_file(tmp_path: Path):
+    env: dict[str, str] = {}
+    main.load_dotenv(tmp_path / "nope.env", env)
+    assert env == {}
+
+
+def test_read_source_refuses_keys_outside_the_root(tmp_path: Path):
+    import pytest
+
+    (tmp_path / "contracts").mkdir()
+    (tmp_path / "contracts" / "a.sol").write_bytes(b"x")
+    assert read_source(tmp_path, "contracts/a.sol") == b"x"
+    with pytest.raises(ValueError):
+        read_source(tmp_path, "../outside.sol")
+
+
+def test_settings_only_claim_analysis_jobs_until_the_sandbox_lands():
+    # Sandbox jobs are left queued for the sandbox runner (next PR) instead
+    # of being claimed and failed here.
+    assert Settings.from_env({}).job_kinds == ("analysis",)
+    assert Settings.from_env({"SANDBOX_ENABLED": "true"}).job_kinds == ("analysis",)
+
+
+def test_run_keeps_polling_after_a_database_error(monkeypatch, tmp_path):
+    import threading
+
+    import psycopg
+
+    calls = []
+    stop = threading.Event()
+
+    def flaky_claim(conn, lease_s, max_attempts, kinds):
+        calls.append(kinds)
+        if len(calls) == 1:
+            raise psycopg.OperationalError('relation "jobs" does not exist')
+        stop.set()
+        return None
+
+    class FakeConn:
+        def close(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(main, "connect", lambda url: FakeConn())
+    monkeypatch.setattr(main, "claim_next", flaky_claim)
+    monkeypatch.setattr(main, "expire_exhausted", lambda conn, max_attempts: 0)
+    settings = Settings.from_env(
+        {
+            "DATABASE_URL": "postgres://x",
+            "SOURCE_STORAGE_DIR": str(tmp_path),
+            "POLL_INTERVAL_SECONDS": "0.01",
+        }
+    )
+    main.run(settings, stop)
+    assert calls == [("analysis",), ("analysis",)]
+
+
+def test_handle_never_raises_when_recording_the_failure_fails(
+    pg_conn, tmp_path, monkeypatch, test_database_url, caplog
+):
+    import logging
+
+    import psycopg
+
+    insert_job(pg_conn, "analysis", "contract_a")
+    job = claim_next(pg_conn, 600, 3)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    def broken_fail(*args, **kwargs):
+        raise psycopg.OperationalError("connection lost")
+
+    monkeypatch.setattr(main, "run_analysis_job", boom)
+    monkeypatch.setattr(main, "fail", broken_fail)
+    with caplog.at_level(logging.ERROR, logger="analysis"):
+        main.handle(job, _settings(tmp_path, test_database_url), explainer=None)
+    assert "could not record" in caplog.text
+
+
+def test_load_dotenv_strips_matching_quotes(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    env_file.write_text('A="quoted value"\nB=\'single\'\nC="unbalanced\n')
+    env: dict[str, str] = {}
+    main.load_dotenv(env_file, env)
+    assert env == {"A": "quoted value", "B": "single", "C": '"unbalanced'}
