@@ -6,6 +6,8 @@ import { createChainActions, type ChainActions } from "./chain/actions.js";
 import { PgChainActionStore } from "./chain/pg-action-store.js";
 import { startPayoutKeeper, type PayoutKeeper } from "./chain/payout-keeper.js";
 import { runVerdictsOnce, startVerdictLoop } from "./chain/verdict-loop.js";
+import { startEventIndexer, type EventIndexerHandle } from "./indexer/indexer.js";
+import { PgIndexerLock, PgIndexerRepository, listFindingIds } from "./indexer/pg-repository.js";
 import { PgContractRepository } from "./contracts/pg-repository.js";
 import { PgPipelineRepository } from "./pipeline/pg-repository.js";
 import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
@@ -64,6 +66,8 @@ const app = buildApp({
 let payoutKeeper: PayoutKeeper | undefined;
 /** Applies sandbox verdicts on-chain; runs only when a chain is configured. */
 let verdictLoop: PayoutKeeper | undefined;
+/** Moves finding statuses from contract events; runs only with a chain and a DB. */
+let indexer: EventIndexerHandle | null = null;
 const port = Number(process.env.PORT ?? 3001);
 
 // app.ts builds Fastify with `logger: false` (keeps tests quiet), so
@@ -75,7 +79,20 @@ async function start(): Promise<void> {
   }
   await app.listen({ port, host: "0.0.0.0" });
   console.log(`@bbm/api listening on port ${port}`);
-  if (chainActions && pool) {
+  if (chainActions && pool && chainConfig) {
+    const db = pool;
+    indexer = startEventIndexer({
+      config: chainConfig,
+      repository: new PgIndexerRepository(db),
+      findingStatus: new PgChainActionStore(db, { challengeWindowSeconds: chainConfig.challengeWindowSeconds }),
+      listFindingIds: () => listFindingIds(db),
+      lock: new PgIndexerLock(db),
+      pollIntervalMs: parseIntEnv(process.env.INDEXER_POLL_MS, 5000),
+      // A resolved dispute (Unfrozen) releases the auditor's claim lock once.
+      onStatusApplied: async (findingId, _status, eventName) => {
+        if (eventName === "Unfrozen") await chainActions.applyDisputeResolved(findingId);
+      },
+    });
     const pipeline = new PgPipelineRepository(pool);
     verdictLoop = startVerdictLoop({
       intervalMs: parseIntEnv(process.env.VERDICT_INTERVAL_MS, 2000),
@@ -120,6 +137,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS).unref();
   try {
+    await indexer?.stop();
     await verdictLoop?.stop();
     await payoutKeeper?.stop();
     await app.close();

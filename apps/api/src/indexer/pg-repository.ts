@@ -159,3 +159,9 @@ export class PgIndexerLock implements IndexerLock {
     client.release();
   }
 }
+
+/** Every finding id, for the indexer's on-chain id lookup. */
+export async function listFindingIds(pool: Pool): Promise<string[]> {
+  const result = await pool.query<{ id: string }>("SELECT id FROM findings");
+  return result.rows.map((row) => row.id);
+}

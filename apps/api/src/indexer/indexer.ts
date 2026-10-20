@@ -1,5 +1,5 @@
 import { createPublicClient, http, type Address, type Hash, type Hex, type Log, type PublicClient } from "viem";
-import { bountyEscrowAbi, disputeResolutionAbi } from "@bbm/shared";
+import { bountyEscrowAbi, disputeResolutionAbi, type FindingStatus } from "@bbm/shared";
 import type { ChainConfig } from "../chain/config.js";
 import { onchainId } from "../chain/ids.js";
 import { decodeChainLog, statusEffectOf, type AbiByAddress, type ChainLog } from "./events.js";
@@ -33,6 +33,9 @@ export interface EventIndexerOptions {
    * their finding appears. */
   pendingMaxAgeBlocks?: bigint;
   now?: () => Date;
+  /** Called after an event's status is applied (e.g. to release a claim lock
+   * once a dispute resolves). A failure is logged and does not stop indexing. */
+  onStatusApplied?: (findingId: string, status: FindingStatus, eventName: string) => Promise<void>;
 }
 
 export interface RunResult {
@@ -201,6 +204,13 @@ async function runLocked(options: EventIndexerOptions): Promise<RunResult> {
     }
     await repository.markApplied({ ...key, eventName: decoded.eventName, appliedAt: at });
     await repository.removePending(key);
+    if (options.onStatusApplied) {
+      try {
+        await options.onStatusApplied(findingId, effect.status, decoded.eventName);
+      } catch (err) {
+        console.error(`indexer onStatusApplied failed for ${decoded.eventName} on ${findingId}`, err);
+      }
+    }
     return "applied";
   }
 
@@ -246,6 +256,7 @@ export interface StartEventIndexerOptions {
   pollIntervalMs?: number;
   /** Defaults to a viem HTTP public client. */
   createClient?: (rpcUrl: string) => IndexerChainClient;
+  onStatusApplied?: EventIndexerOptions["onStatusApplied"];
   onError?: (err: unknown) => void;
 }
 
@@ -276,6 +287,7 @@ export function startEventIndexer(options: StartEventIndexerOptions): EventIndex
     batchSize: options.batchSize,
     confirmations: options.confirmations,
     pendingMaxAgeBlocks: options.pendingMaxAgeBlocks,
+    onStatusApplied: options.onStatusApplied,
   };
 
   let stopped = false;

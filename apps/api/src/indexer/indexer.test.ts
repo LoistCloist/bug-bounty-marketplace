@@ -196,6 +196,46 @@ describe("runOnce", () => {
     expect(findingStatus.calls.map((c) => c.status)).toEqual(["Verified", "Disputed", "Rejected"]);
   });
 
+  it("calls onStatusApplied after each applied status, including the Unfrozen resolution", async () => {
+    const logs = [
+      verifiedLog(2n, 0),
+      makeLog(bountyEscrowAbi, "Frozen", { contractId: CONTRACT_KEY, findingId: FINDING_KEY }, spot(3n, 0)),
+      makeLog(
+        bountyEscrowAbi,
+        "Unfrozen",
+        { contractId: CONTRACT_KEY, findingId: FINDING_KEY, auditorWon: true, verifiedAt: 0n },
+        spot(4n, 0),
+      ),
+    ];
+    const applied: Array<[string, string, string]> = [];
+    const { options } = setup(10n, logs, {
+      onStatusApplied: async (findingId, status, eventName) => {
+        applied.push([findingId, status, eventName]);
+      },
+    });
+
+    await runOnce(options);
+
+    expect(applied).toEqual([
+      [FINDING_API_ID, "Verified", "FindingVerified"],
+      [FINDING_API_ID, "Disputed", "Frozen"],
+      [FINDING_API_ID, "Verified", "Unfrozen"],
+    ]);
+  });
+
+  it("keeps indexing when onStatusApplied throws", async () => {
+    const { options, findingStatus } = setup(10n, [verifiedLog(2n, 0)], {
+      onStatusApplied: async () => {
+        throw new Error("unlock failed");
+      },
+    });
+
+    const result = await runOnce(options);
+
+    expect(result.skipped).toBe(false);
+    expect(findingStatus.statuses.get(FINDING_API_ID)).toBe("Verified");
+  });
+
   it("maps PayoutCredited to Paid", async () => {
     const logs = [
       verifiedLog(2n, 0),
