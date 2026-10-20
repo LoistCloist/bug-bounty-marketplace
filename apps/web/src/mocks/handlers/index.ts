@@ -7,4 +7,5 @@ import { selectHandlers } from "./live";
 export const handlers = selectHandlers(
   [...chainHandlers, ...developerHandlers, ...auditorHandlers, ...arbiterHandlers],
   process.env.NEXT_PUBLIC_LIVE_PIPELINE === "enabled",
+  process.env.NEXT_PUBLIC_LIVE_CHAIN === "enabled",
 );

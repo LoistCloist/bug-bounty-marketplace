@@ -9,6 +9,7 @@ import { developerApi, ApiError } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
 import { ethToWei } from "@/lib/money";
 import { useChainCalls } from "@/lib/chain/use-chain";
+import { isLocalChain, useChainInfo } from "@/lib/chain/config";
 
 function validateFile(file: File | null): string | null {
   if (!file) return "Choose a .sol file to submit.";
@@ -26,6 +27,8 @@ export default function SubmitPage() {
   const router = useRouter();
   const wallet = useWallet();
   const chain = useChainCalls();
+  const chainInfo = useChainInfo();
+  const windowSeconds = isLocalChain(chainInfo) ? chainInfo.challengeWindowSeconds : null;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -207,7 +210,7 @@ export default function SubmitPage() {
 
           {!wallet.address && (
             <p role="status" className="text-sm text-amber-300">
-              Connect your demo wallet in the header before submitting.
+              Connect your {chain ? "wallet" : "demo wallet"} in the header before submitting.
             </p>
           )}
           <button
@@ -223,22 +226,30 @@ export default function SubmitPage() {
           <p>
             <strong className="text-emerald-300">01 · Automated analysis</strong>
             <br />
-            Simulated Slither findings appear in about 3 seconds, with plain-language explanations.
+            {chain
+              ? "Slither findings appear in under a minute, with plain-language explanations."
+              : "Simulated Slither findings appear in about 3 seconds, with plain-language explanations."}
           </p>
           <p>
             <strong className="text-emerald-300">02 · Independent review</strong>
             <br />
-            An auditor claims the contract and submits a Foundry proof of concept.
+            {chain
+              ? "An auditor stakes 0.1 ETH, claims the contract and submits a Foundry proof of concept."
+              : "An auditor claims the contract and submits a Foundry proof of concept."}
           </p>
           <p>
             <strong className="text-emerald-300">03 · Verified resolution</strong>
-            <br />A verified finding opens a challenge window before the simulated payout.
+            <br />
+            {windowSeconds !== null
+              ? `A reproduced exploit opens a ${windowSeconds}-second challenge window, then the bounty is paid on-chain.`
+              : "A verified finding opens a challenge window before the simulated payout."}
           </p>
           <hr />
           <h2>Demo bounty</h2>
           <p>
-            Funds and wallet actions are simulated. No real tokens are required. This session resets
-            when you reload the page.
+            {chain
+              ? "Your bounty is locked in the BountyEscrow contract on a local Anvil chain, using a dev account. No real funds are involved."
+              : "Funds and wallet actions are simulated. No real tokens are required. This session resets when you reload the page."}
           </p>
         </aside>
       </div>

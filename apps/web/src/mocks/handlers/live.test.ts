@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { developerHandlers } from "./developer";
 import { auditorHandlers } from "./auditor";
 import { arbiterHandlers } from "./arbiter";
-import { LIVE_ROUTES, selectHandlers } from "./live";
+import { chainHandlers } from "./chain";
+import { LIVE_CHAIN_ROUTES, LIVE_ROUTES, selectHandlers } from "./live";
 
 const all = [...developerHandlers, ...auditorHandlers, ...arbiterHandlers];
 
@@ -42,6 +43,34 @@ describe("selectHandlers", () => {
 
   it("lists the raw-output route as live even though it has no mock", () => {
     expect(LIVE_ROUTES).toContainEqual({ method: "GET", path: "/api/findings/:id/raw" });
-    expect(LIVE_ROUTES).toHaveLength(9);
+    expect(LIVE_ROUTES).toHaveLength(12);
+  });
+});
+
+describe("selectHandlers with the chain", () => {
+  const withChain = [...chainHandlers, ...all];
+
+  it("pipeline live mode also sends GET /api/chain to the API", () => {
+    expect(routes(selectHandlers(withChain, true))).not.toContain("GET */api/chain");
+  });
+
+  it("chain live mode drops every lifecycle route too", () => {
+    const kept = routes(selectHandlers(withChain, true, true));
+    for (const route of [
+      "POST */api/contracts/:id/cancel",
+      "POST */api/contracts/:id/reclaim",
+      "GET */api/auditor/profile",
+      "POST */api/findings/:id/dispute",
+      "POST */api/findings/:id/false-positive",
+      "GET */api/arbiter/disputes",
+      "POST */api/arbiter/disputes/:id/rule",
+    ]) {
+      expect(kept).not.toContain(route);
+    }
+    expect(LIVE_CHAIN_ROUTES.length).toBeGreaterThan(LIVE_ROUTES.length);
+  });
+
+  it("pipeline live mode keeps the lifecycle routes mocked", () => {
+    expect(routes(selectHandlers(withChain, true))).toContain("GET */api/auditor/profile");
   });
 });
