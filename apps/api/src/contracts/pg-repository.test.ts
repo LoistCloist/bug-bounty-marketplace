@@ -20,8 +20,9 @@ describe.skipIf(!databaseUrl)("PgContractRepository", () => {
   });
 
   afterAll(async () => {
-    await pool.query("DELETE FROM jobs WHERE id = $1", [jobId]);
+    // Contract first, so a concurrent backfill can't re-queue a job for it.
     await pool.query("DELETE FROM contracts WHERE id = $1", [contractId]);
+    await pool.query("DELETE FROM jobs WHERE subject_id = $1", [contractId]);
     await pool.query("DELETE FROM bounties WHERE id = $1", [bountyId]);
     await pool.end();
   });

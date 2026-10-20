@@ -16,8 +16,10 @@ describe.skipIf(!databaseUrl)("migration 0002", () => {
   });
 
   afterAll(async () => {
-    await pool.query("DELETE FROM jobs WHERE subject_id = $1", [contractId]);
+    // Contract first: once it is gone, a concurrent backfill (another test
+    // file running migrations) can't queue a new job for it.
     await pool.query("DELETE FROM contracts WHERE id = $1", [contractId]);
+    await pool.query("DELETE FROM jobs WHERE subject_id = $1", [contractId]);
     await pool.query("DELETE FROM bounties WHERE id = $1", [bountyId]);
     await pool.end();
   });
@@ -34,6 +36,30 @@ describe.skipIf(!databaseUrl)("migration 0002", () => {
     } finally {
       await reader.query("ROLLBACK");
       reader.release();
+    }
+  });
+
+  it("does not backfill closed (Expired or Resolved) contracts", async () => {
+    const closedId = `contract_${randomUUID()}`;
+    const closedBounty = `bounty_${randomUUID()}`;
+    await pool.query(
+      `INSERT INTO bounties (id, contract_id, amount, currency, funded_at, deadline)
+       VALUES ($1, $2, 1, 'ETH', now(), '2020-01-01T00:00:00Z')`,
+      [closedBounty, closedId],
+    );
+    await pool.query(
+      `INSERT INTO contracts (id, developer_address, filename, source_hash, source_reference,
+         bounty_id, status, created_at, deadline)
+       VALUES ($1, $2, 'Old.sol', 'h', 'contracts/x/h.sol', $3, 'Expired', now(), '2020-01-01T00:00:00Z')`,
+      [closedId, "0x" + "1".repeat(40), closedBounty],
+    );
+    try {
+      await runMigrations(pool);
+      const jobs = await pool.query("SELECT 1 FROM jobs WHERE subject_id = $1", [closedId]);
+      expect(jobs.rowCount).toBe(0);
+    } finally {
+      await pool.query("DELETE FROM contracts WHERE id = $1", [closedId]);
+      await pool.query("DELETE FROM bounties WHERE id = $1", [closedBounty]);
     }
   });
 
