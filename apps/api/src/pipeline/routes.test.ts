@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { Address, Hash } from "viem";
 import {
   AnalysisStatusSchema,
   ContractSchema,
@@ -8,6 +9,7 @@ import {
   POC_SOURCE_MAX_BYTES,
 } from "@bbm/shared";
 import { buildApp } from "../app.js";
+import type { AuditorStakingPort } from "../chain/auditor-staking.js";
 import { MemoryContractRepository } from "../contracts/memory-repository.js";
 import { MemorySourceStorage } from "../contracts/storage.js";
 import { multipartBody } from "../testing/http.js";
@@ -318,6 +320,99 @@ describe("POST /api/auditor/poc", () => {
     );
     expect(second.statusCode).toBe(409);
     expect(second.json()).toEqual({ error: "Finding is not Flagged" });
+  });
+});
+
+describe("POST /api/auditor/claim with an on-chain lock", () => {
+  const AUDITOR_A = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as Address;
+  const AUDITOR_B = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC" as Address;
+  const LOCK_HASH = `0x${"cd".repeat(32)}` as Hash;
+
+  function chainSetup(lockImpl: (auditor: Address) => Promise<Hash> = async () => LOCK_HASH) {
+    const store = new MemoryStore();
+    const repository = new MemoryContractRepository(store);
+    const lock = vi.fn(lockImpl);
+    const auditorStaking: AuditorStakingPort = {
+      stakeOf: vi.fn(),
+      activeSubmissions: vi.fn(),
+      lockSubmission: lock,
+      unlockSubmission: vi.fn(),
+    };
+    const app = buildApp({
+      repository,
+      pipeline: new MemoryPipelineRepository(store),
+      storage: new MemorySourceStorage(),
+      config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => T0 },
+      auditorStaking,
+    });
+    const seedContract = async () => {
+      const record = makeContract();
+      await repository.insertContract(record);
+      return record.contract;
+    };
+    const claim = (contractId: string, auditorId: string) =>
+      app.inject({ method: "POST", url: "/api/auditor/claim", payload: { contractId, auditorId } });
+    return { app, repository, lock, seedContract, claim };
+  }
+
+  it("locks the auditor's stake after a successful claim", async () => {
+    const { seedContract, claim, lock } = chainSetup();
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, AUDITOR_A);
+    expect(response.statusCode).toBe(200);
+    expect(ContractSchema.parse(response.json()).status).toBe("Claimed");
+    expect(lock).toHaveBeenCalledTimes(1);
+    expect(lock).toHaveBeenCalledWith(AUDITOR_A);
+  });
+
+  it("returns 409 and does not lock when the contract is not open", async () => {
+    const { seedContract, claim, lock } = chainSetup();
+    const contract = await seedContract();
+    await claim(contract.id, AUDITOR_A);
+    lock.mockClear();
+
+    const second = await claim(contract.id, AUDITOR_B);
+    expect(second.statusCode).toBe(409);
+    expect(lock).not.toHaveBeenCalled();
+  });
+
+  it("returns 502, releases the claim and does not apply it when the lock fails", async () => {
+    const { seedContract, repository, claim, lock } = chainSetup(async (auditor) => {
+      if (auditor === AUDITOR_A) throw new Error("rpc unavailable");
+      return LOCK_HASH;
+    });
+    const contract = await seedContract();
+
+    const failed = await claim(contract.id, AUDITOR_A);
+    expect(failed.statusCode).toBe(502);
+    expect(lock).toHaveBeenCalledWith(AUDITOR_A);
+    expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+    expect((await repository.findContractById(contract.id, T0))?.status).toBe("Open");
+
+    // The contract is open again, so another auditor can claim it.
+    const retry = await claim(contract.id, AUDITOR_B);
+    expect(retry.statusCode).toBe(200);
+    expect(lock).toHaveBeenLastCalledWith(AUDITOR_B);
+  });
+
+  it("rejects a non-address auditorId before claiming, so no lock is sent", async () => {
+    const { seedContract, repository, claim, lock } = chainSetup();
+    const contract = await seedContract();
+
+    const response = await claim(contract.id, "auditor_1");
+    expect(response.statusCode).toBe(400);
+    expect(lock).not.toHaveBeenCalled();
+    expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+  });
+
+  it("skips the lock entirely when no chain is configured", async () => {
+    const ctx = setup();
+    const { contract } = await ctx.seedContract();
+    // Without a port the route never reaches for the chain, so a plain
+    // non-address auditor id still claims.
+    const response = await ctx.claim(contract.id, "auditor_1");
+    expect(response.statusCode).toBe(200);
   });
 });
 

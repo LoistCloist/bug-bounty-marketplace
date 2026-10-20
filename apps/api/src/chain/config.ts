@@ -63,3 +63,12 @@ export function loadChainConfig(env: NodeJS.ProcessEnv): ChainConfig | null {
     disputeResolutionAddress: env.DISPUTE_RESOLUTION_ADDRESS as Address,
   };
 }
+
+/**
+ * True only when CLAIM_LOCK_ENABLED is exactly "true". The on-chain lock on
+ * claim stays off by default: a lock with no unlock (plan item 6) can strand
+ * an auditor's stake.
+ */
+export function claimLockEnabled(env: NodeJS.ProcessEnv): boolean {
+  return env.CLAIM_LOCK_ENABLED === "true";
+}

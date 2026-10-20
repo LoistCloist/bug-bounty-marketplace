@@ -137,6 +137,15 @@ export class PgContractRepository implements ContractRepository {
     return { ok: false, reason: exists.rowCount ? "not_open" : "not_found" };
   }
 
+  async releaseClaim(contractId: string, auditorId: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE contracts
+          SET status = 'Open', claimed_by_auditor_id = NULL, claim_expires_at = NULL
+        WHERE id = $1 AND status = 'Claimed' AND claimed_by_auditor_id = $2`,
+      [contractId, auditorId],
+    );
+  }
+
   async listQueue(now: Date): Promise<QueueItem[]> {
     const result = await this.pool.query<ContractRow & { amount: string; currency: string }>(
       `SELECT ${contractColumns("$1")}, b.amount, b.currency

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Address, Hash } from "viem";
 import { onchainId } from "./ids.js";
-import { loadChainConfig } from "./config.js";
+import { claimLockEnabled, loadChainConfig } from "./config.js";
 import { createAuditorStakingPort } from "./auditor-staking.js";
 
 const STAKING = "0x5FbDB2315678afecb367f032d93F642f64180aa3" as Address;
@@ -110,5 +110,14 @@ describe("createAuditorStakingPort", () => {
     const port = createAuditorStakingPort({ address: STAKING, publicClient, walletClient });
 
     await expect(port.lockSubmission(AUDITOR)).rejects.toThrow(/lockSubmission reverted/);
+  });
+});
+
+describe("claimLockEnabled", () => {
+  it("is off unless CLAIM_LOCK_ENABLED is exactly true", () => {
+    expect(claimLockEnabled({})).toBe(false);
+    expect(claimLockEnabled({ CLAIM_LOCK_ENABLED: "false" })).toBe(false);
+    expect(claimLockEnabled({ CLAIM_LOCK_ENABLED: "1" })).toBe(false);
+    expect(claimLockEnabled({ CLAIM_LOCK_ENABLED: "true" })).toBe(true);
   });
 });
