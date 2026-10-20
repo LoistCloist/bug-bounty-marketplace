@@ -18,10 +18,21 @@ resource "azurerm_key_vault" "shared" {
   tags                     = local.tags
 }
 
+# Service principals (e.g. gh-bbm-global) can be granted from CI. User grants
+# need an Owner / User Access Administrator applying locally: gh-bbm-global's
+# constrained RBAC admin may only assign roles to service principals.
+locals {
+  secret_officers = merge(
+    { for id in var.secret_officer_sp_object_ids : "sp/${id}" => { id = id, type = "ServicePrincipal" } },
+    { for id in var.secret_officer_user_object_ids : "user/${id}" => { id = id, type = "User" } },
+  )
+}
+
 resource "azurerm_role_assignment" "kv_secrets_officer" {
-  for_each = toset(var.secret_officer_object_ids)
+  for_each = local.secret_officers
 
   scope                = azurerm_key_vault.shared.id
   role_definition_name = "Key Vault Secrets Officer"
-  principal_id         = each.key
+  principal_id         = each.value.id
+  principal_type       = each.value.type
 }

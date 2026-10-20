@@ -40,11 +40,13 @@ mock_provider "azurerm" {
 }
 
 variables {
-  subscription_id           = "00000000-0000-0000-0000-000000000000"
-  suffix                    = "a1b2"
-  alert_emails              = ["admin@example.com"]
-  ephemeral_ci_principal_id = "77777777-7777-7777-7777-777777777777"
-  secret_officer_object_ids = ["99999999-9999-9999-9999-999999999999"]
+  subscription_id                = "00000000-0000-0000-0000-000000000000"
+  suffix                         = "a1b2"
+  alert_emails                   = ["admin@example.com"]
+  ephemeral_ci_principal_id      = "77777777-7777-7777-7777-777777777777"
+  secret_officer_sp_object_ids   = ["99999999-9999-9999-9999-999999999999"]
+  secret_officer_user_object_ids = ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
+  acr_push_principal_ids         = ["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
 }
 
 run "plan_names" {
@@ -67,8 +69,21 @@ run "plan_names" {
 
   assert {
     # Secrets are set out of band (never in state); only the RBAC grants are managed.
-    condition     = length(azurerm_role_assignment.kv_secrets_officer) == 1
-    error_message = "expected 1 shared KV Secrets Officer grant"
+    condition     = length(azurerm_role_assignment.kv_secrets_officer) == 2
+    error_message = "expected 2 shared KV Secrets Officer grants (1 SP + 1 user)"
+  }
+
+  assert {
+    condition = (
+      azurerm_role_assignment.kv_secrets_officer["sp/99999999-9999-9999-9999-999999999999"].principal_type == "ServicePrincipal" &&
+      azurerm_role_assignment.kv_secrets_officer["user/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"].principal_type == "User"
+    )
+    error_message = "KV Secrets Officer principal types wrong (SP list -> ServicePrincipal, user list -> User)"
+  }
+
+  assert {
+    condition     = alltrue([for ra in azurerm_role_assignment.acr_push : ra.principal_type == "ServicePrincipal"]) && length(azurerm_role_assignment.acr_push) == 1
+    error_message = "AcrPush grants must be typed ServicePrincipal (ABAC on gh-bbm-global)"
   }
 }
 

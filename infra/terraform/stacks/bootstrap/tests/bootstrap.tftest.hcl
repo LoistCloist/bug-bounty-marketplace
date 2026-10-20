@@ -105,10 +105,11 @@ run "apply_with_mocks" {
 
   assert {
     condition = (
-      toset([for ra in local.oidc_identities["gh-bbm-plan"].role_assignments : ra.role_definition_name]) ==
-      toset(["Reader", "Storage Blob Data Reader"])
+      length(local.oidc_identities["gh-bbm-plan"].role_assignments) == 2 &&
+      local.oidc_identities["gh-bbm-plan"].role_assignments[0].role_definition_name == "Reader" &&
+      local.oidc_identities["gh-bbm-plan"].role_assignments[1] == local.state_role.plan
     )
-    error_message = "plan identity must have only Reader + (conditioned) Storage Blob Data Reader"
+    error_message = "plan identity must have only Reader + the (conditioned) BBM tfstate reader"
   }
 
   # ---- state ABAC --------------------------------------------------------------
@@ -158,8 +159,40 @@ run "apply_with_mocks" {
   }
 
   assert {
-    condition     = local.state_role.plan.role_definition_name == "Storage Blob Data Reader" && local.state_role.staging.role_definition_name == "Storage Blob Data Contributor"
-    error_message = "state role names wrong"
+    condition = (
+      local.state_role_kind == { ephemeral = "writer", global = "writer", staging = "writer", prod = "writer", plan = "reader" } &&
+      alltrue([for k, r in local.state_role : r.role_definition_id == azurerm_role_definition.tfstate[local.state_role_kind[k]].role_definition_resource_id])
+    )
+    error_message = "CI state grants must use the custom BBM tfstate writer/reader roles (plan: reader)"
+  }
+
+  # No CI state role may carry container write/delete (the built-in Storage
+  # Blob Data roles do, and ABAC blob-path conditions cannot limit them).
+  assert {
+    condition = alltrue([for k, r in azurerm_role_definition.tfstate : (
+      toset(r.permissions[0].actions) == toset(["Microsoft.Storage/storageAccounts/blobServices/containers/read"]) &&
+      toset(r.assignable_scopes) == toset([azurerm_resource_group.tfstate.id])
+    )])
+    error_message = "tfstate custom roles may only hold containers/read as a control-plane action"
+  }
+
+  assert {
+    condition = (
+      azurerm_role_definition.tfstate["writer"].name == "BBM tfstate writer" &&
+      toset(azurerm_role_definition.tfstate["writer"].permissions[0].data_actions) == toset([
+        for a in ["read", "write", "add/action", "delete", "move/action"] : "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/${a}"
+      ]) &&
+      azurerm_role_definition.tfstate["reader"].name == "BBM tfstate reader" &&
+      toset(azurerm_role_definition.tfstate["reader"].permissions[0].data_actions) == toset(["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"])
+    )
+    error_message = "tfstate custom role data actions wrong"
+  }
+
+  assert {
+    condition = alltrue(flatten([for name, id in local.oidc_identities : [
+      for ra in id.role_assignments : !contains(["Storage Blob Data Contributor", "Storage Blob Data Reader", "Storage Blob Data Owner"], try(ra.role_definition_name, "-"))
+    ]]))
+    error_message = "CI identities must not hold built-in Storage Blob Data roles"
   }
 
   # ---- constrained RBAC admin --------------------------------------------------
@@ -195,6 +228,11 @@ run "apply_with_mocks" {
   assert {
     condition     = strcontains(output.gh_setup_commands, "repos/LoistCloist/bug-bounty-marketplace/environments/infra-global/deployment-branch-policies")
     error_message = "gh_setup_commands missing infra-global branch policy"
+  }
+
+  assert {
+    condition     = strcontains(output.global_tfvars_hint, "secret_officer_sp_object_ids = [\"77777777-7777-7777-7777-777777777777\"]") && !strcontains(output.global_tfvars_hint, "secret_officer_object_ids")
+    error_message = "global_tfvars_hint must emit secret_officer_sp_object_ids with the gh-bbm-global SP"
   }
 
   assert {

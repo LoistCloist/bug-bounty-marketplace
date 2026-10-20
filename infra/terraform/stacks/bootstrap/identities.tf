@@ -87,8 +87,8 @@ locals {
   } }
 
   # Reads (except List Blobs) need a readable path; write/add/delete/move need a
-  # writable path. Read-only identities get the read clause only (Storage Blob
-  # Data Reader has no write data actions).
+  # writable path. Read-only identities get the read clause only (BBM tfstate
+  # reader has no write data actions).
   state_condition = { for k, a in local.state_access : k => join(" ", concat(
     [
       "((!(ActionMatches{'${local.blob_action}/read'} AND NOT SubOperationMatches{'Blob.List'}))",
@@ -104,12 +104,17 @@ locals {
     ],
   )) }
 
+  # Custom tfstate roles (below), not the Storage Blob Data built-ins: those
+  # also carry control-plane containers/write + containers/delete, which the
+  # blob-path ABAC conditions cannot constrain.
+  state_role_kind = { for k, a in local.state_access : k => length(a.write) == 0 ? "reader" : "writer" }
+
   state_role = { for k, a in local.state_access : k => {
-    key                  = "tfstate"
-    scope                = local.tfstate_container_scope
-    role_definition_name = length(a.write) == 0 ? "Storage Blob Data Reader" : "Storage Blob Data Contributor"
-    condition            = local.state_condition[k]
-    condition_version    = "2.0"
+    key                = "tfstate"
+    scope              = local.tfstate_container_scope
+    role_definition_id = azurerm_role_definition.tfstate[local.state_role_kind[k]].role_definition_resource_id
+    condition          = local.state_condition[k]
+    condition_version  = "2.0"
   } }
 
   rg_ids = {
@@ -176,6 +181,42 @@ resource "azurerm_role_definition" "power_operator" {
   assignable_scopes = [local.subscription_scope]
 }
 
+# Data-plane-only roles for CI state access, assigned on the tfstate container
+# with the ABAC conditions above. The only control-plane action is
+# containers/read, so a leaked CI token cannot delete or reconfigure the
+# container. Defined (and assignable) at the tfstate RG: custom-role
+# assignable scopes must be a subscription, RG or management group.
+# Humans/admins keep the built-in Storage Blob Data Contributor (state.tf).
+locals {
+  tfstate_roles = {
+    writer = {
+      name         = "BBM tfstate writer"
+      description  = "Read/write/lease Terraform state blobs (path-limited by ABAC). No container create/delete."
+      data_actions = [for a in ["read", "write", "add/action", "delete", "move/action"] : "${local.blob_action}/${a}"]
+    }
+    reader = {
+      name         = "BBM tfstate reader"
+      description  = "Read Terraform state blobs (path-limited by ABAC). No container create/delete."
+      data_actions = ["${local.blob_action}/read"]
+    }
+  }
+}
+
+resource "azurerm_role_definition" "tfstate" {
+  for_each = local.tfstate_roles
+
+  name        = each.value.name
+  scope       = azurerm_resource_group.tfstate.id
+  description = each.value.description
+
+  permissions {
+    actions      = ["Microsoft.Storage/storageAccounts/blobServices/containers/read"]
+    data_actions = each.value.data_actions
+  }
+
+  assignable_scopes = [azurerm_resource_group.tfstate.id]
+}
+
 locals {
   # Kept as a local (not inline in the module call) so tests can assert on it.
   oidc_identities = {
@@ -183,6 +224,9 @@ locals {
     # staging, test, preview; never prod or bootstrap), so plan jobs must run
     # with -lock=false. No Key Vault data-plane access: stacks that refresh
     # secret values (data) are planned by their env identity instead.
+    # Accepted trade-off: staging/ state holds TF-generated staging secrets
+    # (PostgreSQL admin password, database-url), so PR plans can read them.
+    # prod/ is excluded for exactly this reason.
     "gh-bbm-plan" = {
       extra_subjects = ["pull_request", "ref:refs/heads/main"]
       role_assignments = [

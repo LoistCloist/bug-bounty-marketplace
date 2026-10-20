@@ -114,10 +114,13 @@ credential for `repo:LoistCloist/bug-bounty-marketplace:environment:<env>`:
 | `contracts-sepolia` | 1 required reviewer                             | `gh-bbm-global`     |
 
 A separate read-only `gh-bbm-plan` identity (subjects `pull_request` and `ref:refs/heads/main`) runs
-`terraform plan` on PRs. It has subscription Reader and a path-conditioned Storage Blob Data Reader on
+`terraform plan` on PRs. It has subscription Reader and a path-conditioned `BBM tfstate reader` on
 state (`global.tfstate`, `staging/`, `test/`, `preview/`; never `prod/` or `bootstrap.tfstate`), so
 plan jobs run with `-lock=false`. It has no Key Vault data-plane role. Prod plans run in the `prod`
-environment as `gh-bbm-prod`.
+environment as `gh-bbm-prod`. **Accepted trade-off:** `staging/` state contains the
+Terraform-generated staging secrets (PostgreSQL admin password and `database-url`), so any PR plan job
+can read them. Staging holds no real user data and those secrets are rotatable, so this is accepted to
+let PRs plan staging; `prod/` is excluded precisely so prod secrets never reach PR jobs.
 
 Least privilege per identity:
 
@@ -136,20 +139,30 @@ Least privilege per identity:
   gate anyway.)
 - The custom role `BBM Power Operator` covers managedClusters read/start/stop, flexibleServers
   read/start/stop and tag writes.
+- The custom roles `BBM tfstate writer` and `BBM tfstate reader` (defined and assignable on
+  `rg-bbm-tfstate-eus2`) are the only state roles CI holds. Both have a single control-plane action,
+  `containers/read`. The writer's data actions are `blobs/read`, `blobs/write`, `blobs/add/action`,
+  `blobs/delete` and `blobs/move/action`; the reader's is `blobs/read`. The built-in Storage Blob Data
+  Contributor/Reader are not used for CI because they also grant `containers/write` and
+  `containers/delete`, which blob-path ABAC conditions don't cover: a leaked short-lived CI token
+  could otherwise delete the whole `tfstate` container. Humans (bootstrap applier and
+  `admin_object_ids`) keep the built-in Storage Blob Data Contributor.
 - **Constrained RBAC Administrator** conditions allow role assignment writes only for an allow-listed
   set of role definition GUIDs **and** `PrincipalType == ServicePrincipal`, and deletes only for the
   same role definitions. CI can therefore only grant roles to workload/managed identities, never to a
-  user or group. Granting a human or group (e.g. adding an admin to `secret_officer_object_ids`) is
-  applied locally by an Owner.
+  user or group. Granting a human (e.g. adding an admin to `secret_officer_user_object_ids`, which is
+  assigned with `principal_type = "User"`) is applied locally by an Owner. Service-principal grants in
+  `stacks/global` (`secret_officer_sp_object_ids`, `acr_push_principal_ids`) set
+  `principal_type = "ServicePrincipal"` so CI can apply them.
 - **State access is prefix-scoped with ABAC** on the blob path (which excludes the container name):
 
-  | Identity           | Role on `tfstate`             | Read + write        | Read only                                         |
-  | ------------------ | ----------------------------- | ------------------- | ------------------------------------------------- |
-  | `gh-bbm-ephemeral` | Storage Blob Data Contributor | `test/`, `preview/` | `global.tfstate`                                  |
-  | `gh-bbm-global`    | Storage Blob Data Contributor | `global.tfstate`    | none                                              |
-  | `gh-bbm-staging`   | Storage Blob Data Contributor | `staging/`          | `global.tfstate`                                  |
-  | `gh-bbm-prod`      | Storage Blob Data Contributor | `prod/`             | `global.tfstate`                                  |
-  | `gh-bbm-plan`      | Storage Blob Data Reader      | none                | `global.tfstate`, `staging/`, `test/`, `preview/` |
+  | Identity           | Role on `tfstate`    | Read + write        | Read only                                         |
+  | ------------------ | -------------------- | ------------------- | ------------------------------------------------- |
+  | `gh-bbm-ephemeral` | `BBM tfstate writer` | `test/`, `preview/` | `global.tfstate`                                  |
+  | `gh-bbm-global`    | `BBM tfstate writer` | `global.tfstate`    | none                                              |
+  | `gh-bbm-staging`   | `BBM tfstate writer` | `staging/`          | `global.tfstate`                                  |
+  | `gh-bbm-prod`      | `BBM tfstate writer` | `prod/`             | `global.tfstate`                                  |
+  | `gh-bbm-plan`      | `BBM tfstate reader` | none                | `global.tfstate`, `staging/`, `test/`, `preview/` |
 
   Read conditions cover `blobs/read` except the `Blob.List` suboperation; write conditions cover
   `blobs/write`, `blobs/add/action`, `blobs/delete` and `blobs/move/action`. List Blobs has no blob
@@ -303,6 +316,8 @@ state, so placeholders are not used.) Terraform-generated secrets (the PG admin 
 `database-url` in the `data` stacks) do live in state. That state is access-scoped: the account
 disables shared keys and uses Entra ID auth only, keeps blob versioning on, and the ABAC conditions
 above limit each env's state to that env's identity, admins, and (for staging only) the plan identity.
+The plan identity's read access to staging secrets is a deliberate trade-off (see section 4); prod
+state is never readable from PR jobs.
 
 **Other.**
 
@@ -385,7 +400,8 @@ infra/terraform/
 
 - **`global` takes bootstrap outputs as tfvars, not remote state.** Bootstrap's `global_tfvars_hint`
   output provides `subscription_id`, `suffix`, `ephemeral_ci_principal_id` and
-  `secret_officer_object_ids`.
+  `secret_officer_sp_object_ids`. Admin users go in `secret_officer_user_object_ids`, applied locally
+  by an Owner.
 
 ### Stack `bootstrap` outputs
 

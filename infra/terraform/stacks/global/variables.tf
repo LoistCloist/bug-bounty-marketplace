@@ -43,8 +43,14 @@ variable "law_daily_quota_gb" {
   default     = 0.25
 }
 
-variable "secret_officer_object_ids" {
-  description = "Entra object IDs granted Key Vault Secrets Officer on the shared vault (gh-bbm-global SP, plus the admins who set the Sepolia secrets with az keyvault secret set). Non-service-principal entries must be applied by an Owner locally: CI's constrained RBAC admin may only assign roles to service principals."
+variable "secret_officer_sp_object_ids" {
+  description = "Service principal object IDs granted Key Vault Secrets Officer on the shared vault (normally the gh-bbm-global SP). Assigned with principal_type ServicePrincipal, so CI (gh-bbm-global) can apply them."
+  type        = list(string)
+  default     = []
+}
+
+variable "secret_officer_user_object_ids" {
+  description = "Entra user object IDs granted Key Vault Secrets Officer on the shared vault (the admins who set the Sepolia secrets with az keyvault secret set). Assigned with principal_type User, which CI's constrained RBAC admin cannot do: changes to this list must be applied locally by a subscription Owner."
   type        = list(string)
   default     = []
 }
@@ -56,7 +62,7 @@ variable "ephemeral_ci_principal_id" {
 }
 
 variable "acr_push_principal_ids" {
-  description = "Additional Entra object IDs granted AcrPush on the registry (e.g. image build identities)."
+  description = "Additional service principal / managed identity object IDs (image build identities) granted AcrPush on the registry. Assigned with principal_type ServicePrincipal; users and groups are not supported."
   type        = list(string)
   default     = []
 }

@@ -64,7 +64,8 @@ output "global_tfvars_hint" {
     subscription_id           = "${var.subscription_id}"
     suffix                    = "${random_string.suffix.result}"
     ephemeral_ci_principal_id = "${module.github_oidc.principal_ids["gh-bbm-ephemeral"]}"
-    secret_officer_object_ids = ["${module.github_oidc.principal_ids["gh-bbm-global"]}"]
+    secret_officer_sp_object_ids = ["${module.github_oidc.principal_ids["gh-bbm-global"]}"]
+    # Add admin users to secret_officer_user_object_ids and apply locally as an Owner.
   EOT
 }
 
