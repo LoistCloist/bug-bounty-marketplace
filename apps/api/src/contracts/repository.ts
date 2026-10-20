@@ -1,4 +1,4 @@
-import type { Bounty, Contract } from "@bbm/shared";
+import type { Bounty, Contract, Wei } from "@bbm/shared";
 import type { NewJob } from "../pipeline/repository.js";
 
 export interface NewContractRecord {
@@ -8,7 +8,7 @@ export interface NewContractRecord {
   analysisJob: NewJob;
 }
 
-export type QueueItem = Contract & { bounty: { amount: number; currency: string } };
+export type QueueItem = Contract & { bounty: { amount: Wei; currency: string } };
 
 export type ClaimResult =
   { ok: true; contract: Contract } | { ok: false; reason: "not_found" | "not_open" };

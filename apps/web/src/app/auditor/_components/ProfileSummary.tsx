@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { auditorApi, developerApi } from "@/lib/api";
 import { StakeGate } from "./StakeGate";
+import { weiToEth } from "@/lib/money";
 
 export function ProfileSummary({ auditorId }: { auditorId: string }) {
   const queryClient = useQueryClient();
@@ -33,7 +34,7 @@ export function ProfileSummary({ auditorId }: { auditorId: string }) {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-sm text-slate-400">Stake</p>
-            <p className="text-lg font-semibold text-white">{profile.stake.toLocaleString()}</p>
+            <p className="text-lg font-semibold text-white">{Number(weiToEth(profile.stake)).toLocaleString()}</p>
           </div>
           <div>
             <p className="text-sm text-slate-400">Reputation</p>

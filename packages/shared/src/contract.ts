@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AddressSchema, IdSchema, TimestampSchema } from "./common";
+import { PositiveWeiSchema } from "./wei";
 
 /**
  * Lifecycle of a submitted contract:
@@ -30,10 +31,10 @@ export const ContractSourceSizeSchema = z
   .max(CONTRACT_SOURCE_MAX_BYTES, { error: "Source file exceeds the 100 KB limit" });
 
 /** Non-file fields of `POST /api/contracts`. Multipart values arrive as
- * strings, so the numeric field is coerced. */
+ * strings; `bountyAmount` is wei as a decimal string. */
 export const ContractSubmissionFieldsSchema = z.object({
   developerAddress: AddressSchema,
-  bountyAmount: z.coerce.number().positive(),
+  bountyAmount: PositiveWeiSchema,
   currency: z.string().min(1).default("ETH"),
   deadline: TimestampSchema,
 });

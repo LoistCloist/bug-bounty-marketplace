@@ -41,7 +41,7 @@ export function makeContract(overrides: Partial<Contract> = {}) {
   const bounty: Bounty = {
     id: bountyId,
     contractId: id,
-    amount: 2,
+    amount: "2000000000000000000",
     currency: "ETH",
     fundedAt: contract.createdAt,
     deadline: contract.deadline,
@@ -225,7 +225,7 @@ export function describeRepositories(
       expect(item).toEqual({
         ...expired.contract,
         status: "Open",
-        bounty: { amount: 2, currency: "ETH" },
+        bounty: { amount: "2000000000000000000", currency: "ETH" },
       });
     });
 

@@ -2,13 +2,20 @@
 
 import React, { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import type { AuditorProfile } from "@bbm/shared";
+import { compareWei, type AuditorProfile } from "@bbm/shared";
 import { auditorApi, ApiError } from "@/lib/api";
+import { ethToWei, weiToEth } from "@/lib/money";
 
 /** Minimum stake an auditor must have posted before the PoC-upload UI
- * unlocks. Deliberately set above the seed auditor's starting 5,000 stake
- * so the gate is demonstrable rather than already-satisfied out of the box. */
+ * unlocks, in demo ETH. Deliberately set above the seed auditor's starting
+ * 5,000 stake so the gate is demonstrable rather than already-satisfied. */
 export const REQUIRED_STAKE = 10_000;
+export const REQUIRED_STAKE_WEI = ethToWei(String(REQUIRED_STAKE));
+
+/** True when a wei stake meets the requirement. Compared exactly, not as numbers. */
+export function isStakeMet(stakeWei: string): boolean {
+  return compareWei(stakeWei, REQUIRED_STAKE_WEI) >= 0;
+}
 
 export function StakeGate({
   profile,
@@ -19,12 +26,13 @@ export function StakeGate({
   auditorId: string;
   onStaked: () => void;
 }) {
-  const shortfall = Math.max(REQUIRED_STAKE - profile.stake, 0);
-  const [amount, setAmount] = useState(String(shortfall || 1_000));
+  const shortfallWei = BigInt(REQUIRED_STAKE_WEI) - BigInt(profile.stake);
+  const [amount, setAmount] = useState(shortfallWei > 0n ? weiToEth(shortfallWei.toString()) : "1000");
   const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: (value: number) => auditorApi.postStake({ auditorId, amount: value }),
+    mutationFn: (valueEth: string) =>
+      auditorApi.postStake({ auditorId, amount: ethToWei(valueEth) }),
     onSuccess: () => {
       setError(null);
       onStaked();
@@ -34,7 +42,7 @@ export function StakeGate({
     },
   });
 
-  const met = profile.stake >= REQUIRED_STAKE;
+  const met = isStakeMet(profile.stake);
 
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
@@ -42,7 +50,7 @@ export function StakeGate({
         <div>
           <p className="text-sm text-slate-400">Stake · demo units</p>
           <p className="text-lg font-semibold text-white">
-            {profile.stake.toLocaleString()} / {REQUIRED_STAKE.toLocaleString()} required
+            {Number(weiToEth(profile.stake)).toLocaleString()} / {REQUIRED_STAKE.toLocaleString()} required
           </p>
         </div>
         {met ? (
@@ -61,12 +69,11 @@ export function StakeGate({
           className="mt-3 flex flex-wrap items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            const value = Number(amount);
-            if (!Number.isFinite(value) || value <= 0) {
+            if (!(Number(amount) > 0)) {
               setError("Enter a positive stake amount.");
               return;
             }
-            mutation.mutate(value);
+            mutation.mutate(amount);
           }}
         >
           <label htmlFor="stake-amount" className="text-sm text-slate-400">

@@ -1,5 +1,6 @@
 import type { Contract, ContractStatus, Finding, FindingSeverity } from "@bbm/shared";
 import { MOCK_ADDRESSES } from "../../lib/addresses";
+import { ethToWei } from "../../lib/money";
 import { db } from "./store";
 import { nextId } from "./ids";
 import { scheduleOnce, cancelScheduled } from "./scheduler";
@@ -100,7 +101,8 @@ export interface CreateContractInput {
   filename: string;
   /** sha256 hex digest of the uploaded source bytes. */
   sourceHash: string;
-  bountyAmount: number;
+  /** Wei as a decimal string. */
+  bountyAmount: string;
   currency: string;
   deadline: string;
 }
@@ -227,7 +229,7 @@ export function seedContractsArea(): void {
   db.bounties.push({
     id: bounty1Id,
     contractId: contract1Id,
-    amount: 2,
+    amount: ethToWei("2"),
     currency: "ETH",
     fundedAt: iso(-60_000),
     deadline: iso(30 * DAY),
@@ -250,7 +252,7 @@ export function seedContractsArea(): void {
   db.bounties.push({
     id: bounty2Id,
     contractId: contract2Id,
-    amount: 5,
+    amount: ethToWei("5"),
     currency: "ETH",
     fundedAt: iso(-2 * DAY),
     deadline: iso(28 * DAY),
@@ -283,7 +285,7 @@ export function seedContractsArea(): void {
   db.bounties.push({
     id: bounty3Id,
     contractId: contract3Id,
-    amount: 3,
+    amount: ethToWei("3"),
     currency: "ETH",
     fundedAt: iso(-5 * DAY),
     deadline: iso(25 * DAY),

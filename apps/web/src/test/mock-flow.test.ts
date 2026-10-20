@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetMockDb, cancelAllScheduled } from "@/mocks/db";
 import { developerApi, auditorApi } from "@/lib/api";
+import { ethToWei } from "@/lib/money";
 
 const SEED_AUDITOR_ID = "auditor_1";
 const SEED_DEVELOPER_ADDRESS = `0x${"d1".repeat(20)}`;
@@ -28,7 +29,7 @@ describe("contract submission -> analysis", () => {
     const contract = await developerApi.submitContract({
       file,
       developerAddress: SEED_DEVELOPER_ADDRESS,
-      bountyAmount: 1,
+      bountyAmount: "1000000000000000000",
       deadline: new Date(Date.now() + 86_400_000).toISOString(),
     });
 
@@ -108,7 +109,7 @@ describe("claim during analysis", () => {
     const contract = await developerApi.submitContract({
       file: new File(["contract Demo {}"], "Demo.sol"),
       developerAddress: SEED_DEVELOPER_ADDRESS,
-      bountyAmount: 1,
+      bountyAmount: "1000000000000000000",
       deadline: new Date(Date.now() + 86_400_000).toISOString(),
     });
     await auditorApi.claimContract({ contractId: contract.id, auditorId: SEED_AUDITOR_ID });
@@ -127,7 +128,7 @@ describe("claim during analysis", () => {
 
 describe("complete demo bounty lifecycle", () => {
   it("accepts a staked PoC, verifies it, and pays after the challenge window", async () => {
-    await auditorApi.postStake({ auditorId: SEED_AUDITOR_ID, amount: 5000 });
+    await auditorApi.postStake({ auditorId: SEED_AUDITOR_ID, amount: ethToWei("5000") });
     const finding = (await developerApi.listFindings("contract_2"))[0]!;
     await auditorApi.submitPoc({
       findingId: finding.id,

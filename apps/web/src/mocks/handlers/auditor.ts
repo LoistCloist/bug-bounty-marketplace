@@ -56,11 +56,11 @@ export const auditorHandlers = [
   http.post("*/api/auditor/stake", async ({ request }) => {
     const body = (await request.json().catch(() => ({}))) as {
       auditorId?: string;
-      amount?: number;
+      amount?: string;
     };
-    if (!body.auditorId || typeof body.amount !== "number") {
+    if (!body.auditorId || typeof body.amount !== "string") {
       return HttpResponse.json(
-        { error: "auditorId and a numeric amount are required" },
+        { error: "auditorId and a wei amount string are required" },
         { status: 400 },
       );
     }

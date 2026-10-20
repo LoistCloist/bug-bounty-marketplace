@@ -37,7 +37,7 @@ class AuditorProfile(BaseModel):
     )
     id: Annotated[str, Field(min_length=1)]
     address: Annotated[str, Field(pattern="^0x[a-fA-F0-9]{40}$")]
-    stake: Annotated[float, Field(ge=0.0)]
+    stake: Annotated[str, Field(pattern="^(0|[1-9]\\d{0,77})$")]
     reputation: float
     claimedContractIds: list[ClaimedContractId]
 
@@ -48,7 +48,7 @@ class Bounty(BaseModel):
     )
     id: Annotated[str, Field(min_length=1)]
     contractId: Annotated[str, Field(min_length=1)]
-    amount: Annotated[float, Field(gt=0.0)]
+    amount: Annotated[str, Field(pattern="^[1-9]\\d{0,77}$")]
     currency: Annotated[str, Field(min_length=1)]
     fundedAt: AwareDatetime
     deadline: AwareDatetime

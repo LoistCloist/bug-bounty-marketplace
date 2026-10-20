@@ -4,7 +4,7 @@
     "issues": [
       "Filename must end in .sol",
       "Must be a valid 0x-prefixed 40 hex character address",
-      "Too small: expected number to be >0",
+      "Must be a positive decimal wei amount",
       "Too small: expected string to have >=1 characters",
       "Invalid ISO datetime"
     ]

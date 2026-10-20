@@ -7,6 +7,7 @@ import { useMutation } from "@tanstack/react-query";
 import { CONTRACT_SOURCE_MAX_BYTES } from "@bbm/shared";
 import { developerApi, ApiError } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
+import { ethToWei } from "@/lib/money";
 
 function validateFile(file: File | null): string | null {
   if (!file) return "Choose a .sol file to submit.";
@@ -43,7 +44,13 @@ export default function SubmitPage() {
       if (!terms.deadline) {
         throw new Error("Choose a deadline.");
       }
-      if (!Number.isFinite(Number(terms.bountyAmount)) || Number(terms.bountyAmount) <= 0) {
+      let bountyWei: string;
+      try {
+        bountyWei = ethToWei(terms.bountyAmount);
+      } catch {
+        throw new Error("Enter a bounty amount in ETH, up to 18 decimal places.");
+      }
+      if (bountyWei === "0") {
         throw new Error("Enter a bounty amount greater than zero.");
       }
       if (!Number.isFinite(new Date(terms.deadline).getTime()) || new Date(terms.deadline).getTime() <= Date.now()) {
@@ -52,7 +59,7 @@ export default function SubmitPage() {
       return developerApi.submitContract({
         file: file!,
         developerAddress: wallet.address,
-        bountyAmount: Number(terms.bountyAmount),
+        bountyAmount: bountyWei,
         currency: terms.currency,
         // `datetime-local` inputs have no timezone/seconds info; normalize
         // to the full ISO 8601 string the shared Contract schema expects.

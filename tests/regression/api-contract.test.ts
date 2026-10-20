@@ -40,7 +40,7 @@ const SAMPLE_SHA256 = "d0e70b2f29d09aff0d9b31f6e6b69ec143466a82cf12c8609735f287f
 
 const fixedFields = {
   developerAddress: "0x00000000000000000000000000000000000dEaD1",
-  bountyAmount: "1.5",
+  bountyAmount: "1500000000000000000",
   currency: "ETH",
   deadline: "2030-01-01T00:00:00.000Z",
 } as const;

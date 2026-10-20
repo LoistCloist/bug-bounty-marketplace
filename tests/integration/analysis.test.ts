@@ -76,7 +76,7 @@ describe.skipIf(skip)("analysis worker", () => {
       const form = new FormData();
       form.set("file", new File([VAULT], "Vault.sol"));
       form.set("developerAddress", `0x${"1".repeat(40)}`);
-      form.set("bountyAmount", "1");
+      form.set("bountyAmount", "1000000000000000000");
       form.set("deadline", "2030-01-01T00:00:00.000Z");
       const created = await postForm(`${env.apiUrl}/api/contracts`, form, ContractSchema);
       expect(created.status).toBe(201);

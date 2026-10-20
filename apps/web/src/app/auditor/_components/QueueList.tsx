@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { auditorApi, ApiError, type QueueItem } from "@/lib/api";
+import { weiToEth } from "@/lib/money";
 
 type SortOption = "newest" | "deadline" | "bounty";
 
@@ -95,7 +96,7 @@ export function QueueList({ auditorId }: { auditorId: string }) {
               <div>
                 <p className="font-medium text-white">{item.filename}</p>
                 <p className="text-sm text-slate-400">
-                  {item.bounty.amount} {item.bounty.currency} - deadline{" "}
+                  {weiToEth(item.bounty.amount)} {item.bounty.currency} - deadline{" "}
                   {new Date(item.deadline).toLocaleDateString()}
                 </p>
               </div>

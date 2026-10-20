@@ -72,7 +72,7 @@ export class MemoryContractRepository implements ContractRepository {
       const bounty = this.store.bounties.get(contract.bountyId);
       items.push({
         ...contract,
-        bounty: { amount: bounty?.amount ?? 0, currency: bounty?.currency ?? "ETH" },
+        bounty: { amount: bounty?.amount ?? "0", currency: bounty?.currency ?? "ETH" },
       });
     }
     return items;
