@@ -10,6 +10,7 @@ import type { ContractRepository, QueueItem } from "../contracts/repository.js";
 import type { SourceStorage } from "../contracts/storage.js";
 import { readMultipart } from "../http/multipart.js";
 import type { PipelineConfig } from "./config.js";
+import { canTransitionFinding } from "../status/transitions.js";
 import type { PipelineRepository } from "./repository.js";
 
 export interface PipelineRouteDeps {
@@ -115,7 +116,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     if (!claim || claim.auditorId !== auditorId) {
       return reply.code(403).send({ error: "You do not hold an active claim on this contract" });
     }
-    if (finding.status !== "Flagged") {
+    if (!canTransitionFinding(finding.status, "Submitted")) {
       return reply.code(409).send({ error: "Finding is not Flagged" });
     }
 
