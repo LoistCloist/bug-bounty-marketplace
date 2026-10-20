@@ -22,4 +22,16 @@ CREATE TABLE IF NOT EXISTS contracts (
   deadline          TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS contracts_developer_address_idx ON contracts (developer_address);
+-- Guarded by a catalog check, as in 0002: CREATE INDEX IF NOT EXISTS takes a
+-- SHARE lock on the table even when the index exists, and this file re-runs on
+-- every boot. That lock conflicts with concurrent writes and can deadlock them.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+     WHERE schemaname = current_schema() AND indexname = 'contracts_developer_address_idx'
+  ) THEN
+    CREATE INDEX contracts_developer_address_idx ON contracts (developer_address);
+  END IF;
+END
+$$;

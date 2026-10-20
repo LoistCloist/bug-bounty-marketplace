@@ -212,10 +212,13 @@ export class PgContractRepository implements ContractRepository {
   }
 
   async listQueue(now: Date): Promise<QueueItem[]> {
+    // Same eligibility as claimContract: a contract with a pending or held lock
+    // state is not claimable, so it is not listed either.
     const result = await this.pool.query<ContractRow & { amount: string; currency: string }>(
       `SELECT ${contractColumns("$1")}, b.amount, b.currency
          FROM contracts c JOIN bounties b ON b.id = c.bounty_id
-        WHERE c.status = 'Open' OR (c.status = 'Claimed' AND c.claim_expires_at <= $1)`,
+        WHERE (c.status = 'Open' OR (c.status = 'Claimed' AND c.claim_expires_at <= $1))
+          AND (c.claim_lock_status IS NULL OR c.claim_lock_status = 'released')`,
       [now],
     );
     return result.rows.map((row) => ({

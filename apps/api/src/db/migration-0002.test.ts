@@ -39,6 +39,23 @@ describe.skipIf(!databaseUrl)("migration 0002", () => {
     }
   });
 
+  it("re-runs without waiting on in-flight writes to contracts (no SHARE lock)", async () => {
+    // A claim or insert mid-transaction holds ROW EXCLUSIVE until commit. A
+    // re-run that took SHARE on contracts would queue behind it, and the two
+    // could deadlock across multi-table transactions.
+    const writer = await pool.connect();
+    try {
+      await writer.query("BEGIN");
+      await writer.query("UPDATE contracts SET filename = filename WHERE id = $1", [contractId]);
+      const rerun = runMigrations(pool);
+      const timedOut = new Promise((resolve) => setTimeout(() => resolve("timed out"), 5_000));
+      expect(await Promise.race([rerun.then(() => "done"), timedOut])).toBe("done");
+    } finally {
+      await writer.query("ROLLBACK");
+      writer.release();
+    }
+  });
+
   it("does not backfill closed (Expired or Resolved) contracts", async () => {
     const closedId = `contract_${randomUUID()}`;
     const closedBounty = `bounty_${randomUUID()}`;
