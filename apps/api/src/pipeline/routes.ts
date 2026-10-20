@@ -108,7 +108,7 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       }
       // With a chain configured, the auditorId is the auditor's on-chain
       // address, so reject anything else before the claim is written.
-      if (chainActions?.chainConfigured && !ADDRESS.test(auditorId)) {
+      if ((stakeReader !== null || chainActions?.chainConfigured) && !ADDRESS.test(auditorId)) {
         return reply.code(400).send({ error: "auditorId must be a 0x-prefixed address" });
       }
       const now = config.now();
@@ -162,6 +162,10 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     const { findingId, auditorId } = body.fields;
     if (!findingId || !auditorId || !body.file) {
       return reply.code(400).send({ error: "findingId, auditorId and file are required" });
+    }
+    // Checked before the claim, so a non-address id is a 400 whatever the claim state.
+    if ((stakeReader !== null || chainActions?.chainConfigured) && !ADDRESS.test(auditorId)) {
+      return reply.code(400).send({ error: "auditorId must be a 0x-prefixed address" });
     }
     const issues = [
       ...(PocSourceFilenameSchema.safeParse(body.file.filename).error?.issues ?? []),

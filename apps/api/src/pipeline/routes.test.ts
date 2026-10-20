@@ -642,7 +642,7 @@ describe("POST /api/auditor/poc verdicts and stake gate", () => {
   it("rejects a non-address auditorId when the stake check is on, without reading stake", async () => {
     const stakeOf = vi.fn(async () => 100_000_000_000_000_000n);
     const ctx = setup({ stakeOf });
-    const finding = await claimedBy(ctx, "auditor_1");
+    const finding = await claimedBy(ctx, "0x"+"a2".repeat(20));
     const response = await ctx.submitPoc(
       { findingId: finding.id, auditorId: "auditor_1" },
       { name: "Exploit.t.sol", content: poc },
