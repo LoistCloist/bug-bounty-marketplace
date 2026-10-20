@@ -22,6 +22,7 @@ infra/terraform/
     global/              bootstrap.tfvars, global.tfvars, backend.hcl
   scripts/
     tf.sh                wrapper: picks stack dir, var-file, backend config and state key
+    ci-static.sh         fmt + validate + test + tflint + shellcheck (what CI runs)
 ```
 
 Later branches add the `data`, `compute` and `aca-ephemeral` stacks, their
@@ -148,6 +149,16 @@ instead of registering it. You can also import it by hand:
 `terraform import 'azurerm_resource_provider_registration.this["Microsoft.Network"]' /subscriptions/<sub>/providers/Microsoft.Network`.
 
 ## Static checks (no Azure credentials needed)
+
+CI (`terraform-static` job) runs `scripts/ci-static.sh`, which does all of
+the below for every stack and module dir that contains `*.tf` (new stacks
+and modules are picked up automatically). Run the same thing locally:
+
+```sh
+infra/terraform/scripts/ci-static.sh     # needs terraform, tflint, shellcheck
+```
+
+Or step by step:
 
 ```sh
 cd infra/terraform
