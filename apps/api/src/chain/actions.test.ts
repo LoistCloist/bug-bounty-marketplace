@@ -28,6 +28,9 @@ function fakePorts() {
     pendingPayouts: vi.fn(async () => 0n),
     readBounty: vi.fn(
       async (_contract: Hex): Promise<OnchainBounty> => ({
+        developer: AUDITOR,
+        amount: 0n,
+        deadline: 0n,
         state: 1,
         submissionCount: 0n,
         verifiedFinding: ZERO_HASH,
@@ -73,7 +76,10 @@ function statefulBounty(ports: ReturnType<typeof fakePorts>) {
     return HASH;
   });
   ports.bountyEscrow.readBounty.mockImplementation(async () => ({
-    state: paid ? 2 : 1,
+    developer: AUDITOR,
+        amount: 0n,
+        deadline: 0n,
+        state: paid ? 2 : 1,
     submissionCount: submissions,
     verifiedFinding: verified,
     verifiedAuditor: AUDITOR,

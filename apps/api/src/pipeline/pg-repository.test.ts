@@ -38,8 +38,11 @@ describeRepositories(
       listContracts: (filter, now) => repo.listContracts(filter, now),
       claimContract: (...args) => repo.claimContract(...args),
       releaseClaim: (id, auditorId) => repo.releaseClaim(id, auditorId),
-      listQueue: (now) => repo.listQueue(now),
+      listQueue: (now, options) => repo.listQueue(now, options),
       findActiveClaim: (id, now) => repo.findActiveClaim(id, now),
+      findBounty: (id) => repo.findBounty(id),
+      markFunded: (id, at) => repo.markFunded(id, at),
+      setContractStatus: (id, next, now) => repo.setContractStatus(id, next, now),
     };
     // Deletes every row the tests inserted so far, so a shared dev database
     // keeps no test rows.

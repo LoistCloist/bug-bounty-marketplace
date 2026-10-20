@@ -1,4 +1,5 @@
-import type { Contract } from "@bbm/shared";
+import type { Bounty, Contract, ContractStatus } from "@bbm/shared";
+import { InvalidTransitionError, canTransitionContract } from "../status/transitions.js";
 import { MemoryStore } from "../pipeline/memory-repository.js";
 import type {
   ActiveClaim,
@@ -106,11 +107,12 @@ export class MemoryContractRepository implements ContractRepository {
     }
   }
 
-  async listQueue(now: Date): Promise<QueueItem[]> {
+  async listQueue(now: Date, options: { fundedOnly?: boolean } = {}): Promise<QueueItem[]> {
     const items: QueueItem[] = [];
     for (const stored of this.store.contracts.values()) {
       const contract = this.store.view(stored, now);
       if (contract.status !== "Open" || !lockIsFree(stored.claimLock)) continue;
+      if (options.fundedOnly && !this.store.onchainFunded.has(contract.id)) continue;
       const bounty = this.store.bounties.get(contract.bountyId);
       items.push({
         ...contract,
@@ -122,5 +124,28 @@ export class MemoryContractRepository implements ContractRepository {
 
   async findActiveClaim(contractId: string, now: Date): Promise<ActiveClaim | null> {
     return this.store.activeClaim(contractId, now);
+  }
+
+  async findBounty(contractId: string): Promise<Bounty | null> {
+    const stored = this.store.contracts.get(contractId);
+    return stored ? (this.store.bounties.get(stored.contract.bountyId) ?? null) : null;
+  }
+
+  async markFunded(contractId: string, at: Date): Promise<void> {
+    if (!this.store.onchainFunded.has(contractId)) this.store.onchainFunded.set(contractId, at.toISOString());
+  }
+
+  async setContractStatus(contractId: string, next: ContractStatus, now: Date = new Date()): Promise<Contract | null> {
+    const stored = this.store.contracts.get(contractId);
+    if (!stored) return null;
+    const current = this.store.view(stored, now).status;
+    if (current === next) return this.store.view(stored, now);
+    if (!canTransitionContract(current, next)) throw new InvalidTransitionError("contract", current, next);
+    stored.contract = { ...stored.contract, status: next };
+    if (next !== "Claimed") {
+      stored.claimedByAuditorId = null;
+      stored.claimExpiresAt = null;
+    }
+    return this.store.view(stored, now);
   }
 }

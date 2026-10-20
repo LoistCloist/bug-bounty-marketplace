@@ -4,12 +4,15 @@ import { readMultipart } from "../http/multipart.js";
 import type { ContractRepository } from "./repository.js";
 import type { SourceStorage } from "./storage.js";
 import { ContractValidationError, submitContract } from "./service.js";
+import { resolveActor, type Auth } from "../auth/session.js";
 
 export interface ContractRouteDeps {
   repository: ContractRepository;
   storage: SourceStorage;
   /** Injectable clock for tests; defaults to the real time. */
   now?: () => Date;
+  /** With a chain configured: uploads are made by the signed-in developer. */
+  identity?: Auth | null;
 }
 
 /** Limits passed to @fastify/multipart. `fileSize` is the server-side cap on
@@ -37,11 +40,14 @@ export function registerContractRoutes(app: FastifyInstance, deps: ContractRoute
     if (!body.file) {
       return reply.code(400).send({ error: "file is required" });
     }
+    const actor = resolveActor(deps.identity ?? null, request, reply, body.fields.developerAddress);
+    if (!actor.ok) return reply;
+    const fields = actor.id ? { ...body.fields, developerAddress: actor.id } : body.fields;
 
     try {
       const contract = await submitContract(
         { ...deps, now },
-        { filename: body.file.filename, bytes: body.file.bytes, fields: body.fields },
+        { filename: body.file.filename, bytes: body.file.bytes, fields },
       );
       return reply.code(201).send(contract);
     } catch (err) {

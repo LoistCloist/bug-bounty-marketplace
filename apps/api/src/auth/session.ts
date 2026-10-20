@@ -110,3 +110,26 @@ function safeEqual(a: string, b: string): boolean {
   const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
 }
+
+export type ActorResult = { ok: true; id: string | undefined } | { ok: false };
+
+/**
+ * Who a request acts for. Without sign-in (no chain configured) it is the id
+ * the client sent, unchanged. With sign-in it is the session's address: no
+ * session is 401, and a client-sent id for someone else is 403.
+ */
+export function resolveActor(
+  auth: Auth | null,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  claimed: unknown,
+): ActorResult {
+  if (!auth) return { ok: true, id: typeof claimed === "string" && claimed ? claimed : undefined };
+  const address = auth.requireSession(request, reply);
+  if (!address) return { ok: false };
+  if (typeof claimed === "string" && claimed && claimed.toLowerCase() !== address.toLowerCase()) {
+    void reply.code(403).send({ error: "you can only act for your signed-in wallet" });
+    return { ok: false };
+  }
+  return { ok: true, id: address };
+}

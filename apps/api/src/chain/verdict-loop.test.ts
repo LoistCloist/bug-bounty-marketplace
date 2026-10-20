@@ -112,7 +112,10 @@ describe("runVerdictsOnce", () => {
       pendingPayouts: vi.fn(async () => 0n),
       readBounty: vi.fn(
         async (): Promise<OnchainBounty> => ({
-          state: 1,
+          developer: AUDITOR,
+        amount: 0n,
+        deadline: 0n,
+        state: 1,
           submissionCount: submissions,
           verifiedFinding: verified,
           verifiedAuditor: AUDITOR,
@@ -163,7 +166,10 @@ describe("runVerdictsOnce", () => {
       pendingPayouts: vi.fn(async () => 0n),
       readBounty: vi.fn(
         async (): Promise<OnchainBounty> => ({
-          state: 1,
+          developer: AUDITOR,
+        amount: 0n,
+        deadline: 0n,
+        state: 1,
           submissionCount: submissions,
           verifiedFinding: verified,
           verifiedAuditor: AUDITOR,
@@ -218,7 +224,10 @@ describe("runVerdictsOnce racing the indexer", () => {
       pendingPayouts: vi.fn(async () => 0n),
       readBounty: vi.fn(
         async (): Promise<OnchainBounty> => ({
-          state: 1,
+          developer: AUDITOR,
+        amount: 0n,
+        deadline: 0n,
+        state: 1,
           submissionCount: submissions,
           verifiedFinding: verified,
           verifiedAuditor: AUDITOR,

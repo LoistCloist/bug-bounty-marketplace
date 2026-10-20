@@ -15,6 +15,7 @@ import type { PipelineConfig } from "./config.js";
 import { canTransitionFinding } from "../status/transitions.js";
 import type { PipelineRepository } from "./repository.js";
 import type { PocVerdictSource } from "./verdict-source.js";
+import { resolveActor, type Auth } from "../auth/session.js";
 
 /** Minimum AuditorStaking.stakeOf an auditor needs before a PoC is accepted:
  * 0.1 ETH, matching AuditorStaking.REQUIRED_STAKE. */
@@ -34,6 +35,9 @@ export interface PipelineRouteDeps {
   stakeReader: Pick<AuditorStakingPort, "stakeOf"> | null;
   /** Sandbox verdict source for PoC uploads. */
   verdicts: PocVerdictSource;
+  /** With a chain configured: claims and PoCs act for the signed-in auditor,
+   * and the queue lists only bounties funded on-chain. */
+  identity?: Auth | null;
 }
 
 const ADDRESS = /^0x[a-fA-F0-9]{40}$/;
@@ -59,6 +63,7 @@ export function pocStorageKey(pocId: string, sha256: string): string {
  * auditor queue and claims, and PoC submission. */
 export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRouteDeps): void {
   const { contracts, pipeline, storage, config, chainActions, stakeReader, verdicts } = deps;
+  const identity = deps.identity ?? null;
 
   app.get<{ Params: { id: string } }>("/api/contracts/:id/findings", async (request, reply) => {
     const now = config.now();
@@ -91,13 +96,16 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
         request.log.error({ err }, "releaseExpiredLocks failed");
       });
     }
-    return sortQueue(await contracts.listQueue(now), sort as QueueSort | undefined);
+    return sortQueue(await contracts.listQueue(now, { fundedOnly: identity !== null }), sort as QueueSort | undefined);
   });
 
   app.post<{ Body: { contractId?: unknown; auditorId?: unknown } | undefined }>(
     "/api/auditor/claim",
     async (request, reply) => {
-      const { contractId, auditorId } = request.body ?? {};
+      const actor = resolveActor(identity, request, reply, request.body?.auditorId);
+      if (!actor.ok) return reply;
+      const contractId = request.body?.contractId;
+      const auditorId = actor.id;
       if (
         typeof contractId !== "string" ||
         !contractId ||
@@ -159,7 +167,10 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
         ? reply.code(413).send({ error: "PoC file exceeds the 100 KB limit" })
         : reply.code(400).send({ error: "Expected a multipart/form-data body" });
     }
-    const { findingId, auditorId } = body.fields;
+    const actor = resolveActor(identity, request, reply, body.fields.auditorId);
+    if (!actor.ok) return reply;
+    const findingId = body.fields.findingId;
+    const auditorId = actor.id;
     if (!findingId || !auditorId || !body.file) {
       return reply.code(400).send({ error: "findingId, auditorId and file are required" });
     }

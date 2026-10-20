@@ -48,11 +48,12 @@ if (chainConfig && !sessionSecret) {
 }
 const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
 const lockEnabled = claimLockEnabled(process.env);
+const bountyEscrowPort = chainConfig ? createBountyEscrowFromConfig(chainConfig) : undefined;
 const chainActions: ChainActions | undefined =
   chainConfig && pool
     ? createChainActions({
         store: new PgChainActionStore(pool, { challengeWindowSeconds: chainConfig.challengeWindowSeconds }),
-        bountyEscrow: createBountyEscrowFromConfig(chainConfig),
+        bountyEscrow: bountyEscrowPort,
         auditorStaking: lockEnabled && stakingPort ? stakingPort : undefined,
         claimLockEnabled: lockEnabled,
       })
@@ -67,6 +68,7 @@ const app = buildApp({
   chainActions,
   chainConfig,
   sessionSecret,
+  bountyEscrow: bountyEscrowPort,
 });
 
 /** Runs the payout keeper only when a chain is configured. */

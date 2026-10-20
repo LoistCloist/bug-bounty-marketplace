@@ -44,6 +44,8 @@ export interface StoredJob {
 export class MemoryStore {
   readonly contracts = new Map<string, StoredContract>();
   readonly bounties = new Map<string, Bounty>();
+  /** Contract id → when its bounty was confirmed funded on-chain. */
+  readonly onchainFunded = new Map<string, string>();
   readonly findings = new Map<string, FindingRecord>();
   readonly pocs = new Map<string, PoCSubmission>();
   /** PoC id → when its verdict was applied (poc_submissions.verdict_applied_at). */

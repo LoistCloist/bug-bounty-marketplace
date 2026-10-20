@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
-import type { Contract, ContractStatus } from "@bbm/shared";
+import type { Bounty, Contract, ContractStatus } from "@bbm/shared";
+import { InvalidTransitionError, canTransitionContract } from "../status/transitions.js";
 import type {
   ActiveClaim,
   ClaimResult,
@@ -211,15 +212,16 @@ export class PgContractRepository implements ContractRepository {
     );
   }
 
-  async listQueue(now: Date): Promise<QueueItem[]> {
+  async listQueue(now: Date, options: { fundedOnly?: boolean } = {}): Promise<QueueItem[]> {
     // Same eligibility as claimContract: a contract with a pending or held lock
     // state is not claimable, so it is not listed either.
     const result = await this.pool.query<ContractRow & { amount: string; currency: string }>(
       `SELECT ${contractColumns("$1")}, b.amount, b.currency
          FROM contracts c JOIN bounties b ON b.id = c.bounty_id
         WHERE (c.status = 'Open' OR (c.status = 'Claimed' AND c.claim_expires_at <= $1))
-          AND (c.claim_lock_status IS NULL OR c.claim_lock_status = 'released')`,
-      [now],
+          AND (c.claim_lock_status IS NULL OR c.claim_lock_status = 'released')
+          AND ($2::boolean = false OR b.onchain_funded_at IS NOT NULL)`,
+      [now, options.fundedOnly ?? false],
     );
     return result.rows.map((row) => ({
       ...toContract(row),
@@ -235,5 +237,56 @@ export class PgContractRepository implements ContractRepository {
     );
     const row = result.rows[0];
     return row ? { auditorId: row.claimed_by_auditor_id, expiresAt: row.claim_expires_at } : null;
+  }
+
+  async findBounty(contractId: string): Promise<Bounty | null> {
+    const result = await this.pool.query<{
+      id: string;
+      contract_id: string;
+      amount: string;
+      currency: string;
+      funded_at: Date;
+      deadline: Date;
+    }>("SELECT id, contract_id, amount, currency, funded_at, deadline FROM bounties WHERE contract_id = $1", [
+      contractId,
+    ]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      contractId: row.contract_id,
+      amount: String(row.amount),
+      currency: row.currency,
+      fundedAt: row.funded_at.toISOString(),
+      deadline: row.deadline.toISOString(),
+    };
+  }
+
+  async markFunded(contractId: string, at: Date): Promise<void> {
+    await this.pool.query(
+      "UPDATE bounties SET onchain_funded_at = COALESCE(onchain_funded_at, $2) WHERE contract_id = $1",
+      [contractId, at],
+    );
+  }
+
+  async setContractStatus(contractId: string, next: ContractStatus, now: Date = new Date()): Promise<Contract | null> {
+    const current = await this.findContractById(contractId, now);
+    if (!current) return null;
+    if (current.status === next) return current;
+    if (!canTransitionContract(current.status, next)) {
+      throw new InvalidTransitionError("contract", current.status, next);
+    }
+    // Guard on the stored row so a concurrent claim or resolution is not
+    // overwritten; leaving Claimed clears the claim columns.
+    const result = await this.pool.query(
+      `UPDATE contracts
+          SET status = $2,
+              claimed_by_auditor_id = CASE WHEN $2 = 'Claimed' THEN claimed_by_auditor_id END,
+              claim_expires_at = CASE WHEN $2 = 'Claimed' THEN claim_expires_at END
+        WHERE id = $1 AND status IN ('Open', 'Claimed') AND status <> 'Resolved'`,
+      [contractId, next],
+    );
+    if (result.rowCount !== 1) throw new InvalidTransitionError("contract", current.status, next);
+    return this.findContractById(contractId, now);
   }
 }

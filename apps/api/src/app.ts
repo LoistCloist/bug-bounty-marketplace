@@ -10,6 +10,8 @@ import type { ChainConfig } from "./chain/config.js";
 import { registerChainRoutes } from "./chain/routes.js";
 import { Auth } from "./auth/session.js";
 import { registerAuthRoutes } from "./auth/routes.js";
+import type { BountyEscrowPort } from "./chain/bounty-escrow.js";
+import { registerContractLifecycleRoutes } from "./contracts/lifecycle-routes.js";
 import { loadPipelineConfig, type PipelineConfig } from "./pipeline/config.js";
 import { MemoryPipelineRepository, MemoryStore } from "./pipeline/memory-repository.js";
 import type { PipelineRepository } from "./pipeline/repository.js";
@@ -47,6 +49,10 @@ export interface AppOptions {
   sessionSecret?: string;
   /** Clock for sign-in; defaults to the pipeline config's clock. */
   now?: () => Date;
+  /** BountyEscrow reads for the developer lifecycle routes. With it and a
+   * session secret, the API is in chain mode: user routes act for the
+   * signed-in wallet and confirm user transactions on-chain. */
+  bountyEscrow?: Pick<BountyEscrowPort, "readBounty">;
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -66,7 +72,17 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   registerChainRoutes(app, { config: options.chainConfig ?? null });
   const auth = options.sessionSecret ? new Auth(options.sessionSecret, options.now ?? config.now) : null;
   if (auth) registerAuthRoutes(app, auth);
-  registerContractRoutes(app, { repository, storage, now: config.now });
+  // Chain mode: identities come from the session, user transactions are confirmed on-chain.
+  const identity = auth && options.bountyEscrow ? auth : null;
+  registerContractRoutes(app, { repository, storage, now: config.now, identity });
+  if (identity && options.bountyEscrow) {
+    registerContractLifecycleRoutes(app, {
+      contracts: repository,
+      bountyEscrow: options.bountyEscrow,
+      auth: identity,
+      now: options.now ?? config.now,
+    });
+  }
   registerPipelineRoutes(app, {
     contracts: repository,
     pipeline,
@@ -75,6 +91,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     stakeReader: options.stakeReader ?? null,
     verdicts: options.verdicts ?? new NotConfiguredVerdictSource(),
     chainActions: options.chainActions,
+    identity,
   });
 
   return app;
