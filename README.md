@@ -128,3 +128,37 @@ This repo is being built incrementally on `feat/m2-foundation` via small,
 reviewed sub-branches (monorepo scaffold → shared schemas → web shell with
 mocks → developer/auditor/arbiter flows → CI). See `CLAUDE.md` for the full
 workflow and conventions.
+
+## Frontend MVP (BountyGuard)
+
+From the repository root on Windows PowerShell:
+
+```powershell
+pnpm install
+pnpm dev
+```
+
+Open http://localhost:3000. The frontend defaults to the self-contained MSW demo.
+No API server, database, wallet extension, or blockchain is needed. The dark
+workspace includes an overview, searchable contract portfolio, submission form,
+auditor queue with staking and PoC uploads, and dispute review. The in-app
+Getting started page includes sample Solidity and PoC files.
+
+Use the sidebar or role selector to switch actors. Navigation preserves the
+in-memory demo; a full reload resets it. The displayed wallets, stakes, analysis,
+verification, and payments are simulated. Sample PoC files demonstrate uploads,
+not working exploits. AI explanations are advisory; only the simulated sandbox
+changes verification status.
+
+For a future live API integration, set `NEXT_PUBLIC_API_MOCKING=disabled` before
+starting/building, and provide the matching `/api/*` routes. This switch alone
+does not implement wallet authentication or on-chain transactions.
+
+If the mock worker needs regeneration after an MSW dependency change:
+
+```powershell
+pnpm --filter @bbm/web exec msw init public --save
+```
+
+Frontend checks: `pnpm --filter @bbm/web typecheck`, `pnpm --filter @bbm/web lint`,
+`pnpm --filter @bbm/web test`, and `pnpm --filter @bbm/web build`.

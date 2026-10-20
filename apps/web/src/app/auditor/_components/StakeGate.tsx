@@ -38,9 +38,9 @@ export function StakeGate({
 
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="text-sm text-slate-400">Stake</p>
+          <p className="text-sm text-slate-400">Stake · demo units</p>
           <p className="text-lg font-semibold text-white">
             {profile.stake.toLocaleString()} / {REQUIRED_STAKE.toLocaleString()} required
           </p>
