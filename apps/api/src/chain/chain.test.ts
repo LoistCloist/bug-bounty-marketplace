@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Address, Hash } from "viem";
+import type { Address, Hash, Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { onchainId } from "./ids.js";
 import { claimLockEnabled, loadChainConfig } from "./config.js";
 import { createAuditorStakingPort } from "./auditor-staking.js";
@@ -8,6 +9,7 @@ const STAKING = "0x5FbDB2315678afecb367f032d93F642f64180aa3" as Address;
 const AUDITOR = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as Address;
 const HASH = `0x${"ab".repeat(32)}` as Hash;
 const KEY = `0x${"11".repeat(32)}`;
+const ARBITER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address;
 
 const VALID_ENV = {
   CHAIN_RPC_URL: "http://127.0.0.1:8545",
@@ -53,6 +55,53 @@ describe("loadChainConfig", () => {
     expect(() => loadChainConfig({ ...VALID_ENV, OPERATOR_PRIVATE_KEY: "0x1234" })).toThrow(
       /OPERATOR_PRIVATE_KEY/,
     );
+  });
+
+  it("reads addresses, arbiter and challenge window from CHAIN_DEPLOYMENTS_FILE", () => {
+    const deployment = {
+      auditorStaking: STAKING,
+      bountyEscrow: "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+      disputeResolution: "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+      arbiter: ARBITER,
+      challengeWindow: 60,
+    };
+    const config = loadChainConfig(
+      {
+        CHAIN_RPC_URL: "http://anvil:8545",
+        PUBLIC_CHAIN_RPC_URL: "http://localhost:8545",
+        CHAIN_ID: "31337",
+        OPERATOR_PRIVATE_KEY: KEY,
+        CHAIN_DEPLOYMENTS_FILE: "/deployments/31337.json",
+      },
+      (path) => {
+        expect(path).toBe("/deployments/31337.json");
+        return JSON.stringify(deployment);
+      },
+    );
+    expect(config).toMatchObject({
+      auditorStakingAddress: STAKING,
+      bountyEscrowAddress: deployment.bountyEscrow,
+      disputeResolutionAddress: deployment.disputeResolution,
+      arbiterAddress: ARBITER,
+      challengeWindowSeconds: 60,
+      publicRpcUrl: "http://localhost:8545",
+    });
+  });
+
+  it("names a field missing from the deployments file", () => {
+    expect(() =>
+      loadChainConfig(
+        { CHAIN_RPC_URL: "http://x", CHAIN_ID: "31337", OPERATOR_PRIVATE_KEY: KEY, CHAIN_DEPLOYMENTS_FILE: "/d.json" },
+        () => JSON.stringify({ auditorStaking: STAKING, disputeResolution: STAKING, arbiter: ARBITER, challengeWindow: 60 }),
+      ),
+    ).toThrow(/bountyEscrow/);
+  });
+
+  it("defaults the arbiter to the operator and the window to 3 days without a deployments file", () => {
+    const config = loadChainConfig(VALID_ENV);
+    expect(config?.arbiterAddress).toBe(privateKeyToAccount(KEY as Hex).address);
+    expect(config?.challengeWindowSeconds).toBe(259200);
+    expect(config?.publicRpcUrl).toBe(VALID_ENV.CHAIN_RPC_URL);
   });
 
   it("rejects a non-integer chain id", () => {

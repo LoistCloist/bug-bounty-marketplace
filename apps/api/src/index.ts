@@ -56,6 +56,7 @@ const app = buildApp({
   // The PoC stake gate reads stake regardless of CLAIM_LOCK_ENABLED.
   stakeReader: stakingPort,
   chainActions,
+  chainConfig,
 });
 
 /** Runs the payout keeper only when a chain is configured. */

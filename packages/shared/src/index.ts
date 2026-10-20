@@ -13,6 +13,7 @@ export * from "./poc-submission";
 export * from "./dispute";
 export * from "./auditor-profile";
 export * from "./analysis";
+export * from "./chain";
 export * from "./wei";
 export * from "./abi/auditorStaking";
 export * from "./abi/bountyEscrow";
