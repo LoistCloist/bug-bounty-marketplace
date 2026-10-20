@@ -103,30 +103,59 @@ and data, compute and aca-ephemeral read global.
 No client secrets anywhere. Each GitHub Environment maps to an app registration with a federated
 credential for `repo:LoistCloist/bug-bounty-marketplace:environment:<env>`:
 
-| GitHub Environment  | Protection                                      | App registration   |
-| ------------------- | ----------------------------------------------- | ------------------ |
-| `test`              | none                                            | `gh-bbm-ephemeral` |
-| `preview`           | none                                            | `gh-bbm-ephemeral` |
-| `infra-global`      | 1 required reviewer, `main` only                | `gh-bbm-global`    |
-| `staging`           | `main` only                                     | `gh-bbm-staging`   |
-| `prod`              | 1 required reviewer, `main` only                | `gh-bbm-prod`      |
-| `prod-power`        | no reviewer, `main` only (scheduled auto-pause) | `gh-bbm-prod`      |
-| `contracts-sepolia` | 1 required reviewer                             | `gh-bbm-global`    |
+| GitHub Environment  | Protection                                      | App registration    |
+| ------------------- | ----------------------------------------------- | ------------------- |
+| `test`              | none                                            | `gh-bbm-ephemeral`  |
+| `preview`           | none                                            | `gh-bbm-ephemeral`  |
+| `infra-global`      | 1 required reviewer, `main` only                | `gh-bbm-global`     |
+| `staging`           | `main` only                                     | `gh-bbm-staging`    |
+| `prod`              | 1 required reviewer, `main` only                | `gh-bbm-prod`       |
+| `prod-power`        | no reviewer, `main` only (scheduled auto-pause) | `gh-bbm-prod-power` |
+| `contracts-sepolia` | 1 required reviewer                             | `gh-bbm-global`     |
 
 A separate read-only `gh-bbm-plan` identity (subjects `pull_request` and `ref:refs/heads/main`) runs
-`terraform plan` on PRs. It has Reader, data-plane read roles and only Storage Blob Data Reader on
-state, so plan jobs run with `-lock=false`.
+`terraform plan` on PRs. It has subscription Reader and a path-conditioned Storage Blob Data Reader on
+state (`global.tfstate`, `staging/`, `test/`, `preview/`; never `prod/` or `bootstrap.tfstate`), so
+plan jobs run with `-lock=false`. It has no Key Vault data-plane role. Prod plans run in the `prod`
+environment as `gh-bbm-prod`.
 
 Least privilege per identity:
 
-- `gh-bbm-ephemeral`: Contributor on the test and preview RGs, AcrPush, and Managed Identity Operator
-  on `id-bbm-aca-pull`.
-- `gh-bbm-global`: Contributor on the shared RG and Cost Management Contributor.
+- `gh-bbm-ephemeral`: Contributor on the test and preview RGs, Reader on the shared RG, AcrPush, Managed
+  Identity Operator on `id-bbm-aca-pull` and Log Analytics Contributor on the shared LAW.
+- `gh-bbm-global`: Contributor on the shared RG, a constrained RBAC Administrator on the shared RG
+  (AcrPull, AcrPush, Managed Identity Operator, Log Analytics Contributor, Key Vault Secrets
+  Officer/User), Key Vault Secrets Officer on the shared RG (contracts-sepolia reads the Sepolia
+  secrets) and Cost Management Contributor on the subscription.
 - `gh-bbm-staging` and `gh-bbm-prod`: Contributor on their env's data and compute RGs, a constrained
-  RBAC Administrator, and AKS RBAC Cluster Admin.
-- Every other CI identity has Storage Blob Data Contributor on the `tfstate` container.
+  RBAC Administrator on both, AKS RBAC Cluster Admin on compute, Key Vault Secrets Officer on data,
+  Reader on the shared RG plus a constrained RBAC Administrator there that may only grant AcrPull.
+- `gh-bbm-prod-power`: only `BBM Power Operator` on the prod data and compute RGs. No Contributor, no
+  RBAC admin and no state access, so the reviewer-free `prod-power` environment can pause and resume
+  prod but cannot change it. (Staging's scheduled pause uses `gh-bbm-staging`, which has no reviewer
+  gate anyway.)
 - The custom role `BBM Power Operator` covers managedClusters read/start/stop, flexibleServers
   read/start/stop and tag writes.
+- **Constrained RBAC Administrator** conditions allow role assignment writes only for an allow-listed
+  set of role definition GUIDs **and** `PrincipalType == ServicePrincipal`, and deletes only for the
+  same role definitions. CI can therefore only grant roles to workload/managed identities, never to a
+  user or group. Granting a human or group (e.g. adding an admin to `secret_officer_object_ids`) is
+  applied locally by an Owner.
+- **State access is prefix-scoped with ABAC** on the blob path (which excludes the container name):
+
+  | Identity           | Role on `tfstate`             | Read + write        | Read only                                         |
+  | ------------------ | ----------------------------- | ------------------- | ------------------------------------------------- |
+  | `gh-bbm-ephemeral` | Storage Blob Data Contributor | `test/`, `preview/` | `global.tfstate`                                  |
+  | `gh-bbm-global`    | Storage Blob Data Contributor | `global.tfstate`    | none                                              |
+  | `gh-bbm-staging`   | Storage Blob Data Contributor | `staging/`          | `global.tfstate`                                  |
+  | `gh-bbm-prod`      | Storage Blob Data Contributor | `prod/`             | `global.tfstate`                                  |
+  | `gh-bbm-plan`      | Storage Blob Data Reader      | none                | `global.tfstate`, `staging/`, `test/`, `preview/` |
+
+  Read conditions cover `blobs/read` except the `Blob.List` suboperation; write conditions cover
+  `blobs/write`, `blobs/add/action`, `blobs/delete` and `blobs/move/action`. List Blobs has no blob
+  path attribute, so listing key names stays unconditional (contents never are). The backend's state
+  lock is a blob lease, which is `blobs/write` on the key's own blob, so locking works wherever writes
+  are allowed. `bootstrap.tfstate` is human-only (the bootstrap applier and `admin_object_ids`).
 
 Repo variables (not secrets): `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_PLAN_CLIENT_ID`,
 `TFSTATE_RG`, `TFSTATE_ACCOUNT`, `ACR_NAME`, plus a per-environment `AZURE_CLIENT_ID`. Every Azure
@@ -266,10 +295,14 @@ allows.
 - Azure automatically starts a PG Flexible Server that has been stopped for 7 days. `env-power.yml`
   runs a daily scheduled re-pause for any env tagged `paused` or `down`.
 
-**Secrets in tfstate.** Generated values (PG admin password, `database-url`) are in Terraform state.
-The state account disables shared keys, uses Entra ID auth only and keeps blob versioning on. Access
-is limited to the CI identities and admins. The `llm-api-key` value is a placeholder that is set out
-of band (`ignore_changes`), so it never enters state.
+**Secrets in tfstate.** Externally supplied secrets never enter Terraform: the shared vault's
+`sepolia-rpc-url`, `sepolia-deployer-key` and `etherscan-api-key`, and each env vault's `llm-api-key`,
+are created and set with `az keyvault secret set`, and Terraform has no `azurerm_key_vault_secret` for
+them. (A secret resource with `ignore_changes = [value]` would still refresh the live value into
+state, so placeholders are not used.) Terraform-generated secrets (the PG admin password and
+`database-url` in the `data` stacks) do live in state. That state is access-scoped: the account
+disables shared keys and uses Entra ID auth only, keeps blob versioning on, and the ABAC conditions
+above limit each env's state to that env's identity, admins, and (for staging only) the plan identity.
 
 **Other.**
 
@@ -316,7 +349,12 @@ infra/terraform/
 
 - `$TFSTATE_RG` and `$TFSTATE_ACCOUNT` (repo variables in CI) override the backend file's resource
   group and storage account.
-- `aca-ephemeral` requires `$TF_STATE_KEY`, which must start with `<env>/`.
+- They are also exported as `TF_VAR_tfstate_resource_group` / `TF_VAR_tfstate_account` (unless
+  already set) for stacks that read other stacks through `terraform_remote_state`.
+- `aca-ephemeral` requires `$TF_STATE_KEY` matching `<env>/run-<run_id>-<attempt>.tfstate` or
+  `<env>/pr-<n>.tfstate` (`validate` excepted).
+- `apply <planfile>` applies a saved plan without `-var-file`. `init -migrate-state` / `-reconfigure`
+  run without `-input=false` so Terraform can prompt.
 - `TF_VAR_*` environment variables pass straight through to Terraform.
 - Stack lock files are committed for `linux_amd64`, `linux_arm64` and `darwin_arm64`.
 - Bootstrap starts on local state. Its `backend "azurerm" {}` block is uncommented after the first
@@ -340,9 +378,10 @@ infra/terraform/
   - Monitoring Metrics Publisher
   - Network Contributor
   - Private DNS Zone Contributor
-  - Storage Blob and Queue data roles
+  - Storage Blob Data Contributor and Reader
+  - Storage Queue Data Contributor, Reader, Message Processor and Message Sender
 
-  A stack that needs another role adds it there in the same PR.
+  Only service principals may be assignees. A stack that needs another role adds it there in the same PR.
 
 - **`global` takes bootstrap outputs as tfvars, not remote state.** Bootstrap's `global_tfvars_hint`
   output provides `subscription_id`, `suffix`, `ephemeral_ci_principal_id` and
@@ -375,25 +414,25 @@ infra/terraform/
 
 `<sfx>` is a 4-character lowercase random string. `modules/naming` emits all of these.
 
-| Thing                       | Name                                                                                                                                     |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| tfstate RG / SA / container | `rg-bbm-tfstate-eus2` / `stbbmtfstate<sfx>` / `tfstate`                                                                                  |
-| shared RG                   | `rg-bbm-shared-eus2`                                                                                                                     |
-| ACR                         | `acrbbm<sfx>` (Basic, admin off)                                                                                                         |
-| shared Log Analytics        | `log-bbm-shared-eus2`                                                                                                                    |
-| ACA pull identity           | `id-bbm-aca-pull` (AcrPull)                                                                                                              |
-| shared Key Vault            | `kv-bbm-shared-<sfx>` (secrets `sepolia-rpc-url`, `sepolia-deployer-key`, `etherscan-api-key`)                                           |
-| ephemeral RGs               | `rg-bbm-test-eus2`, `rg-bbm-preview-eus2` (created by bootstrap)                                                                         |
-| env RGs                     | `rg-bbm-<env>-data-eus2`, `rg-bbm-<env>-compute-eus2`, nodes `rg-bbm-<env>-aksnodes-eus2`                                                |
-| VNet                        | `vnet-bbm-<env>-eus2`: staging `10.20.0.0/16`, prod `10.30.0.0/16`; subnets `snet-aks` /20, `snet-psql` /24 (delegated), `snet-pe` /24   |
-| Postgres                    | `psql-bbm-<env>-eus2`, `B_Standard_B1ms`, v16, database `bbm`, private (VNet-integrated + private DNS)                                   |
-| env Key Vault               | `kv-bbm-<stg\|prd>-<sfx>`, RBAC mode, 7-day soft delete, no purge protection; secrets `database-url`, `pg-admin-password`, `llm-api-key` |
-| env storage                 | `stbbm<stg\|prd><sfx>`, container `sources`, queue `analysis-jobs`, shared keys disabled                                                 |
-| env Log Analytics           | `log-bbm-<env>-eus2` (daily cap)                                                                                                         |
-| identities                  | `id-bbm-<env>-aks`, `id-bbm-<env>-api`, `id-bbm-<env>-worker`, `id-bbm-<env>-sandbox`                                                    |
-| ingress IP                  | `pip-bbm-<env>-ingress`, Standard static, DNS label `bbm-<env>` (in the data RG)                                                         |
-| AKS                         | `aks-bbm-<env>-eus2`                                                                                                                     |
-| ACA environment             | `cae-bbm-<env_name>` (`env_name` = `run-<id>-<attempt>` or `pr-<n>`)                                                                     |
+| Thing                       | Name                                                                                                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| tfstate RG / SA / container | `rg-bbm-tfstate-eus2` / `stbbmtfstate<sfx>` / `tfstate`                                                                                                     |
+| shared RG                   | `rg-bbm-shared-eus2`                                                                                                                                        |
+| ACR                         | `acrbbm<sfx>` (Basic, admin off)                                                                                                                            |
+| shared Log Analytics        | `log-bbm-shared-eus2`                                                                                                                                       |
+| ACA pull identity           | `id-bbm-aca-pull` (AcrPull)                                                                                                                                 |
+| shared Key Vault            | `kv-bbm-shared-<sfx>` (secrets `sepolia-rpc-url`, `sepolia-deployer-key`, `etherscan-api-key`, set out of band)                                             |
+| ephemeral RGs               | `rg-bbm-test-eus2`, `rg-bbm-preview-eus2` (created by bootstrap)                                                                                            |
+| env RGs                     | `rg-bbm-<env>-data-eus2`, `rg-bbm-<env>-compute-eus2`, nodes `rg-bbm-<env>-aksnodes-eus2`                                                                   |
+| VNet                        | `vnet-bbm-<env>-eus2`: staging `10.20.0.0/16`, prod `10.30.0.0/16`; subnets `snet-aks` /20, `snet-psql` /24 (delegated), `snet-pe` /24                      |
+| Postgres                    | `psql-bbm-<env>-eus2`, `B_Standard_B1ms`, v16, database `bbm`, private (VNet-integrated + private DNS)                                                      |
+| env Key Vault               | `kv-bbm-<stg\|prd>-<sfx>`, RBAC mode, 7-day soft delete, no purge protection; secrets `database-url`, `pg-admin-password` (TF), `llm-api-key` (out of band) |
+| env storage                 | `stbbm<stg\|prd><sfx>`, container `sources`, queue `analysis-jobs`, shared keys disabled                                                                    |
+| env Log Analytics           | `log-bbm-<env>-eus2` (daily cap)                                                                                                                            |
+| identities                  | `id-bbm-<env>-aks`, `id-bbm-<env>-api`, `id-bbm-<env>-worker`, `id-bbm-<env>-sandbox`                                                                       |
+| ingress IP                  | `pip-bbm-<env>-ingress`, Standard static, DNS label `bbm-<env>` (in the data RG)                                                                            |
+| AKS                         | `aks-bbm-<env>-eus2`                                                                                                                                        |
+| ACA environment             | `cae-bbm-<env_name>` (`env_name` = `run-<id>-<attempt>` or `pr-<n>`)                                                                                        |
 
 Tags on everything: `project=bbm`, `env`, `layer=global|data|compute|ephemeral`,
 `managed_by=terraform`, `repo=LoistCloist/bug-bounty-marketplace`, `cost_center=cse416`. Ephemeral

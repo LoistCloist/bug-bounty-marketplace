@@ -44,7 +44,7 @@ variable "law_daily_quota_gb" {
 }
 
 variable "secret_officer_object_ids" {
-  description = "Entra object IDs granted Key Vault Secrets Officer on the shared vault (e.g. gh-bbm-global SP, bbm-admins)."
+  description = "Entra object IDs granted Key Vault Secrets Officer on the shared vault (gh-bbm-global SP, plus the admins who set the Sepolia secrets with az keyvault secret set). Non-service-principal entries must be applied by an Owner locally: CI's constrained RBAC admin may only assign roles to service principals."
   type        = list(string)
   default     = []
 }

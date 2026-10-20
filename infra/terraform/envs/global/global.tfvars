@@ -11,5 +11,5 @@ law_daily_quota_gb = 0.25
 
 # Object IDs (not client IDs) from bootstrap output github_principal_ids.
 ephemeral_ci_principal_id = null # gh-bbm-ephemeral
-secret_officer_object_ids = []   # e.g. gh-bbm-global SP, bbm-admins group
+secret_officer_object_ids = []   # gh-bbm-global SP + your admin user/group (needed to az keyvault secret set)
 acr_push_principal_ids    = []

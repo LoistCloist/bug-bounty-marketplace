@@ -1,10 +1,9 @@
-# Shared vault for cross-environment secrets (Sepolia deployment). Secret
-# VALUES are set out-of-band (az keyvault secret set); Terraform only creates
-# placeholders and never overwrites them.
-
-locals {
-  shared_secrets = ["sepolia-rpc-url", "sepolia-deployer-key", "etherscan-api-key"]
-}
+# Shared vault for cross-environment secrets (Sepolia deployment:
+# sepolia-rpc-url, sepolia-deployer-key, etherscan-api-key). Terraform creates
+# only the vault and its RBAC; the secrets are created and set out of band with
+# `az keyvault secret set` (docs/devops/azure-bootstrap.md), so externally
+# supplied values never enter Terraform state. (An azurerm_key_vault_secret
+# with ignore_changes = [value] would still refresh the live value into state.)
 
 resource "azurerm_key_vault" "shared" {
   name                       = module.naming.global.shared_key_vault
@@ -25,21 +24,4 @@ resource "azurerm_role_assignment" "kv_secrets_officer" {
   scope                = azurerm_key_vault.shared.id
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = each.key
-}
-
-resource "azurerm_key_vault_secret" "placeholder" {
-  for_each = toset(local.shared_secrets)
-
-  name         = each.key
-  value        = "placeholder-set-me"
-  content_type = "text/plain"
-  key_vault_id = azurerm_key_vault.shared.id
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-
-  # RBAC data-plane grants must exist before secrets can be written. (CI's
-  # gh-bbm-global also has Secrets Officer on the shared RG from bootstrap.)
-  depends_on = [azurerm_role_assignment.kv_secrets_officer]
 }

@@ -66,8 +66,9 @@ run "plan_names" {
   }
 
   assert {
-    condition     = length(azurerm_key_vault_secret.placeholder) == 3
-    error_message = "expected 3 placeholder secrets"
+    # Secrets are set out of band (never in state); only the RBAC grants are managed.
+    condition     = length(azurerm_role_assignment.kv_secrets_officer) == 1
+    error_message = "expected 1 shared KV Secrets Officer grant"
   }
 }
 
