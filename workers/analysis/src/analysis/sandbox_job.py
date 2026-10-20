@@ -78,6 +78,14 @@ def run_sandbox_job(
         "UPDATE poc_submissions SET sandbox_status = %s, sandbox_log = %s WHERE id = %s",
         (result.status, without_nul(result.log), row["id"]),
     )
+    if settings.chain_enabled:
+        # The API records the verification on-chain, then moves the finding.
+        complete(conn, job.id)
+        conn.commit()
+        log.info(
+            "PoC %s: %s (finding %s left for the API)", row["id"], result.status, row["finding_id"]
+        )
+        return JobOutcome(ok=True)
     conn.execute(
         "UPDATE findings SET status = %s,"
         " status_history = status_history || %s,"

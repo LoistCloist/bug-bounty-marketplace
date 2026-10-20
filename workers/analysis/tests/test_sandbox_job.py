@@ -202,3 +202,22 @@ def test_poc_pragma_incompatible_with_the_target_rejects_it_with_a_reason(
     assert stored["sandbox_status"] == "Failed"
     assert "No supported Solidity version satisfies all of" in stored["sandbox_log"]
     assert _row(pg_conn, "findings", finding_id)["status"] == "Rejected"
+
+
+@pytest.mark.parametrize("status", ["Passed", "Failed"])
+def test_chain_enabled_records_the_result_only(pg_conn, tmp_path, status):
+    """With a chain, the API applies the verdict on-chain; the worker leaves the finding alone."""
+    settings = Settings.from_env({"SOURCE_STORAGE_DIR": str(tmp_path), "CHAIN_ENABLED": "true"})
+    finding_id, poc_id = _submitted_poc(pg_conn, tmp_path)
+    before = _row(pg_conn, "findings", finding_id)
+    job = claim_next(pg_conn, 600, 3)
+    runner = FakeRunner(SandboxResult(status=status, log="log", infra_error=None))
+
+    assert run_sandbox_job(pg_conn, job, settings, runner=runner).ok
+
+    assert _row(pg_conn, "poc_submissions", poc_id)["sandbox_status"] == status
+    finding = _row(pg_conn, "findings", finding_id)
+    assert finding["status"] == "Submitted"
+    assert finding["status_history"] == before["status_history"]
+    assert finding["challenge_window_expires_at"] is None
+    assert _row(pg_conn, "jobs", job.id)["status"] == "done"
