@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Sweeps leftovers of ephemeral ACA environments (stacks/aca-ephemeral).
 #
-#   scripts/janitor.sh [--apply] [--acr-purge] [--state-max-age-hours N]
+#   scripts/janitor.sh [--dry-run | --apply] [--state-max-age-hours N]
 #
 #   --dry-run                 list what would be deleted (default)
 #   --apply                   actually delete
-#   --acr-purge               also purge old pr-*/sha-* images from bbm/* (needs $ACR_NAME);
-#                             in dry-run mode `acr purge --dry-run` only reports
 #   --state-max-age-hours N   tfstate blobs under test/ older than N hours are deleted (default 24)
 #
 # What it does (needs `az login`; CI uses the gh-bbm-ephemeral OIDC identity):
@@ -17,10 +15,16 @@
 #      $TFSTATE_ACCOUNT that are older than the max age (Entra auth only).
 #      Preview state (preview/pr-<n>.tfstate) is left for preview.yml's
 #      destroy-on-close job. Blob versioning/soft delete keep them recoverable.
-#   3. With --acr-purge: `acr purge` of bbm/* tags pr-* and sha-* older than
-#      30 days, keeping the 10 newest per repository, plus untagged manifests.
 #
-# Env: TFSTATE_ACCOUNT (step 2 is skipped when unset), ACR_NAME (--acr-purge).
+# Any failed `az` listing (auth, throttling, ...) fails the run.
+#
+# It does not touch ACR: the image purge (acr purge --filter 'bbm/.*:pr-.*'
+# --filter 'bbm/.*:sha-.*' --ago 30d --keep 10 --untagged) is its own job in
+# .github/workflows/infra-janitor.yml, run as gh-bbm-global in the
+# reviewer-gated infra-global environment. That job delete-locks the
+# staging/prod bbm-last-deployed-tag tags first and fails closed.
+#
+# Env: TFSTATE_ACCOUNT (step 2 is skipped when unset).
 set -euo pipefail
 
 RESOURCE_GROUPS=(rg-bbm-test-eus2 rg-bbm-preview-eus2)
@@ -28,7 +32,6 @@ STATE_CONTAINER=tfstate
 STATE_PREFIX=test/
 
 dry_run=true
-acr_purge=false
 state_max_age_hours=24
 
 die() {
@@ -49,7 +52,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --apply) dry_run=false ;;
     --dry-run) dry_run=true ;;
-    --acr-purge) acr_purge=true ;;
     --state-max-age-hours)
       [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || die "--state-max-age-hours needs a number"
       state_max_age_hours=$2
@@ -81,8 +83,13 @@ $dry_run || mode="APPLY"
 log "mode: $mode, now: ${now}Z"
 
 # Prints the IDs of expired ephemeral resources of one type in one RG.
+# The listing is captured first so an az failure exits non-zero (a failure
+# inside `< <(...)` would be ignored by set -e).
 expired_ids() {
-  local rg=$1 type=$2 id expires
+  local rg=$1 type=$2 id expires out
+  out=$(az resource list --resource-group "$rg" --resource-type "$type" \
+    --query "[?tags.ephemeral=='true'].[id, tags.expires_on]" -o tsv --only-show-errors) ||
+    die "listing $type in $rg failed"
   while IFS=$'\t' read -r id expires; do
     [[ -n "$id" ]] || continue
     if [[ -z "$expires" || "$expires" == "None" ]]; then
@@ -92,8 +99,7 @@ expired_ids() {
     if [[ "${expires:0:19}" < "$now" ]]; then
       echo "$id"
     fi
-  done < <(az resource list --resource-group "$rg" --resource-type "$type" \
-    --query "[?tags.ephemeral=='true'].[id, tags.expires_on]" -o tsv --only-show-errors)
+  done <<<"$out"
 }
 
 delete_ids() {
@@ -111,16 +117,27 @@ delete_ids() {
 
 # 1. Expired container apps, then their environments.
 for rg in "${RESOURCE_GROUPS[@]}"; do
-  if [[ "$(az group exists --name "$rg" --only-show-errors)" != "true" ]]; then
+  exists=$(az group exists --name "$rg" --only-show-errors) || die "checking resource group $rg failed"
+  if [[ "$exists" != "true" ]]; then
     log "resource group $rg not found, skipping"
     continue
   fi
   # Plain read loops instead of mapfile: bash 3.2 (macOS) has no mapfile.
+  # expired_ids runs in a command substitution, so its die only exits the
+  # subshell; `|| exit 1` propagates it.
   apps=()
-  while IFS= read -r id; do apps+=("$id"); done < <(expired_ids "$rg" Microsoft.App/containerApps)
+  ids=$(expired_ids "$rg" Microsoft.App/containerApps) || exit 1
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    apps+=("$id")
+  done <<<"$ids"
   delete_ids "delete container app" ${apps[@]+"${apps[@]}"}
   envs=()
-  while IFS= read -r id; do envs+=("$id"); done < <(expired_ids "$rg" Microsoft.App/managedEnvironments)
+  ids=$(expired_ids "$rg" Microsoft.App/managedEnvironments) || exit 1
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    envs+=("$id")
+  done <<<"$ids"
   delete_ids "delete managed environment" ${envs[@]+"${envs[@]}"}
   [[ ${#apps[@]} -gt 0 || ${#envs[@]} -gt 0 ]] || log "$rg: nothing expired"
 done
@@ -129,6 +146,10 @@ done
 if [[ -z "${TFSTATE_ACCOUNT:-}" ]]; then
   log "TFSTATE_ACCOUNT not set, skipping tfstate cleanup"
 else
+  blobs=$(az storage blob list --auth-mode login --account-name "$TFSTATE_ACCOUNT" \
+    --container-name "$STATE_CONTAINER" --prefix "$STATE_PREFIX" --num-results "*" \
+    --query "[].[name, properties.lastModified]" -o tsv --only-show-errors) ||
+    die "listing $STATE_CONTAINER/$STATE_PREFIX blobs in $TFSTATE_ACCOUNT failed"
   stale=0
   while IFS=$'\t' read -r name modified; do
     [[ -n "$name" ]] || continue
@@ -142,19 +163,8 @@ else
           log "WARN: could not delete $name (leased/locked?)"
       fi
     fi
-  done < <(az storage blob list --auth-mode login --account-name "$TFSTATE_ACCOUNT" \
-    --container-name "$STATE_CONTAINER" --prefix "$STATE_PREFIX" --num-results "*" \
-    --query "[].[name, properties.lastModified]" -o tsv --only-show-errors)
+  done <<<"$blobs"
   [[ $stale -gt 0 ]] || log "no $STATE_PREFIX state blobs older than ${state_max_age_hours}h"
-fi
-
-# 3. Optional ACR purge (runs as an ACR task, so no local docker needed).
-if $acr_purge; then
-  [[ -n "${ACR_NAME:-}" ]] || die "--acr-purge needs ACR_NAME"
-  purge_cmd="acr purge --filter 'bbm/.*:pr-.*' --filter 'bbm/.*:sha-.*' --ago 30d --keep 10 --untagged"
-  $dry_run && purge_cmd+=" --dry-run"
-  log "acr run on $ACR_NAME: $purge_cmd"
-  az acr run --registry "$ACR_NAME" --cmd "$purge_cmd" /dev/null --only-show-errors
 fi
 
 log "done ($mode)"

@@ -306,19 +306,23 @@ empty `kv-bbm-shared-<sfx>`. It also grants `gh-bbm-ephemeral` AcrPush, Managed 
 `id-bbm-aca-pull` and Log Analytics Contributor. After this, `terraform.yml` applies `global` on
 pushes to `main` through the `infra-global` environment.
 
-## 11. Mirror the Postgres image into ACR
+## 11. Mirror the Postgres and curl images into ACR
 
 The ephemeral envs pull their Postgres sidecar from ACR, not Docker Hub, to avoid anonymous pull
-rate limits:
+rate limits. The `helm test` pod on staging/prod likewise pulls `<acr>/mirror/curl:8.10.1`
+(`tests.mirrorImage` in the chart), so a missing mirror fails `helm test` with `ImagePullBackOff`:
 
 ```sh
 ACR=$(./scripts/tf.sh global global output -raw acr_name)
 az acr import -n "$ACR" \
   --source docker.io/library/postgres:16-alpine \
   --image mirror/postgres:16-alpine
+az acr import -n "$ACR" \
+  --source docker.io/curlimages/curl:8.10.1 \
+  --image mirror/curl:8.10.1
 ```
 
-Re-run with `--force` to pick up a newer patch release.
+Re-run the Postgres import with `--force` to pick up a newer patch release.
 
 ## 12. Set the shared Key Vault secrets
 
@@ -337,8 +341,26 @@ Use `--file` for the deployer key so it doesn't land in shell history, then dele
 (`ForbiddenByRbac`) means you aren't in `secret_officer_user_object_ids` (step 10), or the assignment
 hasn't propagated yet (wait a few minutes and retry).
 
-The env vaults (`kv-bbm-stg-<sfx>`, `kv-bbm-prd-<sfx>`) get `llm-api-key` set the same way after
-their `data` stack is applied.
+The env vaults (`kv-bbm-stg-<sfx>`, `kv-bbm-prd-<sfx>`) get `llm-api-key` in step 13.
+
+## 13. Per env: set `llm-api-key` before the first deploy
+
+**Required** for staging and for prod, after that env's `data` stack is applied and **before** the
+first deploy to it. Terraform writes only `database-url` and `pg-admin-password` to the env vault;
+`llm-api-key` is set out of band so the real value never enters state. The Helm chart's
+SecretProviderClass mounts all three, so if `llm-api-key` is missing the pods stay in
+`ContainerCreating` (the CSI mount fails), the release times out and `--atomic` rolls it back.
+
+```sh
+KV=$(./scripts/tf.sh data staging output -raw key_vault_name)   # repeat with prod
+az keyvault secret set --vault-name "$KV" -n llm-api-key --value "<key or placeholder-set-me>"
+```
+
+A placeholder such as `placeholder-set-me` is enough to get the pods running; replace it with the
+real key later (the CSI driver picks up the new version within its 2-minute rotation interval). A
+403 means your user isn't in `secret_officer_user_object_ids` in `envs/<env>/data.tfvars`. Those
+grants use `principal_type = "User"`, which CI can't create, so apply that list locally as a
+subscription Owner first; CI then sees no diff.
 
 ## Verification checklist
 
@@ -356,9 +378,13 @@ their `data` stack is applied.
 - [ ] `gh api repos/LoistCloist/bug-bounty-marketplace/environments --jq '.environments[].name'`
       lists all seven environments.
 - [ ] Reviewer and branch rules match the table in step 9.
-- [ ] `az acr repository show -n <acr> --repository mirror/postgres` succeeds.
+- [ ] `az acr repository show -n <acr> --repository mirror/postgres` and
+      `az acr repository show -n <acr> --repository mirror/curl` succeed.
 - [ ] `az keyvault secret list --vault-name <shared-kv> --query "[].name" -o tsv` lists
       `sepolia-rpc-url` and `sepolia-deployer-key` (and `etherscan-api-key` if set).
+- [ ] For each env whose `data` stack is applied,
+      `az keyvault secret show --vault-name <env-kv> -n llm-api-key --query name -o tsv` prints
+      `llm-api-key`.
 - [ ] Dispatch `terraform.yml` with a `plan` of `global`. It should log in through OIDC and report no
       changes. Plan jobs run with `-lock=false`, because `gh-bbm-plan` only has a path-conditioned
       `BBM tfstate reader` on state.

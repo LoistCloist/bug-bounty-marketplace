@@ -87,13 +87,22 @@ variable "location_abbr" {
 }
 
 variable "tfstate_resource_group" {
-  description = "Resource group of the tfstate storage account, used to read global.tfstate. CI sets TF_VAR_tfstate_resource_group from vars.TFSTATE_RG."
+  description = "Resource group of the tfstate storage account, used to read global.tfstate. tf.sh exports TF_VAR_tfstate_resource_group from $TFSTATE_RG."
   type        = string
-  default     = ""
+  default     = "rg-bbm-tfstate-eus2"
+
+  validation {
+    condition     = length(trimspace(var.tfstate_resource_group)) > 0
+    error_message = "tfstate_resource_group must not be empty: set TFSTATE_RG (tf.sh exports it as TF_VAR_tfstate_resource_group)."
+  }
 }
 
 variable "tfstate_account" {
-  description = "tfstate storage account name, used to read global.tfstate. CI sets TF_VAR_tfstate_account from vars.TFSTATE_ACCOUNT."
+  description = "tfstate storage account name (stbbmtfstate<sfx>), used to read global.tfstate. tf.sh exports TF_VAR_tfstate_account from $TFSTATE_ACCOUNT."
   type        = string
-  default     = ""
+
+  validation {
+    condition     = can(regex("^[a-z0-9]{3,24}$", var.tfstate_account))
+    error_message = "tfstate_account must be a storage account name (3-24 lowercase letters/digits): set TFSTATE_ACCOUNT (tf.sh exports it as TF_VAR_tfstate_account)."
+  }
 }

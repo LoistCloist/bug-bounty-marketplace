@@ -154,3 +154,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "rbac_propagation_wait" {
+  description = "How long to wait after the Managed Identity Operator / AcrPull grants before creating the cluster (RBAC propagation)."
+  type        = string
+  default     = "90s"
+}

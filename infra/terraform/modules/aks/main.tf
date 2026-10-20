@@ -37,6 +37,17 @@ resource "azurerm_role_assignment" "kubelet_acr_pull" {
   skip_service_principal_aad_check = true
 }
 
+# Role assignments take a while to propagate. Creating the cluster straight
+# after them fails with CustomKubeletIdentityMissingPermissionError (on the
+# first apply and on every `up`, since the kubelet identity is recreated).
+resource "time_sleep" "rbac_propagation" {
+  create_duration = var.rbac_propagation_wait
+  triggers = {
+    kubelet_operator = azurerm_role_assignment.cluster_kubelet_operator.id
+    kubelet_acr_pull = azurerm_role_assignment.kubelet_acr_pull.id
+  }
+}
+
 resource "azurerm_kubernetes_cluster" "this" {
   name                = var.name
   location            = var.location
@@ -166,10 +177,7 @@ resource "azurerm_kubernetes_cluster" "this" {
     ignore_changes = [default_node_pool[0].node_count]
   }
 
-  depends_on = [
-    azurerm_role_assignment.cluster_kubelet_operator,
-    azurerm_role_assignment.kubelet_acr_pull,
-  ]
+  depends_on = [time_sleep.rbac_propagation]
 }
 
 resource "azurerm_kubernetes_cluster_node_pool" "apps" {

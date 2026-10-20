@@ -74,8 +74,14 @@ variable "ingress_pip_zones" {
   default     = ["1", "2", "3"]
 }
 
-variable "secret_officer_object_ids" {
-  description = "Entra object IDs granted Key Vault Secrets Officer on the env vault: the human running a local apply (Terraform writes database-url/pg-admin-password) and whoever sets llm-api-key out of band. CI (gh-bbm-<env>) already has it via bootstrap."
+variable "secret_officer_sp_object_ids" {
+  description = "Service principal object IDs granted Key Vault Secrets Officer on the env vault. Assigned with principal_type ServicePrincipal, so CI can apply them. CI (gh-bbm-<env>) already has the role via bootstrap and need not be listed."
+  type        = list(string)
+  default     = []
+}
+
+variable "secret_officer_user_object_ids" {
+  description = "Entra user object IDs granted Key Vault Secrets Officer on the env vault: the human running a local apply (Terraform writes database-url/pg-admin-password) and whoever sets llm-api-key out of band. Assigned with principal_type User, which CI cannot grant: apply changes to this list locally as a subscription Owner first, after which CI sees no diff."
   type        = list(string)
   default     = []
 }

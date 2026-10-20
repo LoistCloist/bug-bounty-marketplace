@@ -38,6 +38,9 @@ mock_provider "azurerm" {
   }
 }
 
+# time_sleep (AKS RBAC propagation) is a no-op under the mock.
+mock_provider "time" {}
+
 override_data {
   target = data.terraform_remote_state.global
   values = {

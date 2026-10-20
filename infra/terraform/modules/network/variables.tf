@@ -45,6 +45,16 @@ variable "postgres_private_dns_zone_name" {
   }
 }
 
+variable "ingress_public_ip" {
+  description = "Ingress public IP address (the AKS LB frontend). Used as the NSG destination for Internet ingress because the LB uses floating IP, so packets arrive addressed to this IP rather than to a node IP."
+  type        = string
+
+  validation {
+    condition     = can(cidrhost("${var.ingress_public_ip}/32", 0))
+    error_message = "ingress_public_ip must be a single IPv4 address."
+  }
+}
+
 variable "ingress_ports" {
   description = "TCP ports allowed from the Internet into the AKS subnet (ingress load balancer)."
   type        = list(string)

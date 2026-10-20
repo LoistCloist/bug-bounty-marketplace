@@ -37,6 +37,13 @@ mock_provider "azurerm" {
     }
   }
 
+  mock_resource "azurerm_public_ip" {
+    defaults = {
+      id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.Network/publicIPAddresses/pip-bbm-staging-ingress"
+      ip_address = "20.0.0.10"
+    }
+  }
+
   mock_resource "azurerm_log_analytics_workspace" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-bbm-staging-data-eus2/providers/Microsoft.OperationalInsights/workspaces/log-bbm-staging-eus2"
@@ -182,7 +189,8 @@ run "apply_with_mocks" {
 
   # Exercises the officer grant + time_sleep RBAC propagation path.
   variables {
-    secret_officer_object_ids = ["99999999-9999-9999-9999-999999999999"]
+    secret_officer_sp_object_ids   = ["88888888-8888-8888-8888-888888888888"]
+    secret_officer_user_object_ids = ["99999999-9999-9999-9999-999999999999"]
   }
 
   assert {
@@ -224,6 +232,16 @@ run "apply_with_mocks" {
   assert {
     condition     = startswith(nonsensitive(module.postgres.database_url), "postgres://bbmadmin:") && endswith(nonsensitive(module.postgres.database_url), "@psql-bbm-staging-eus2.postgres.database.azure.com:5432/bbm?sslmode=require")
     error_message = "database-url format wrong"
+  }
+
+  assert {
+    condition     = module.network.ingress_destination_address_prefix == "20.0.0.10" && output.ingress_ip == "20.0.0.10"
+    error_message = "AKS NSG Internet ingress must target the ingress public IP (LB floating IP)"
+  }
+
+  assert {
+    condition     = module.keyvault.secret_officer_principal_types == { "sp/88888888-8888-8888-8888-888888888888" = "ServicePrincipal", "user/99999999-9999-9999-9999-999999999999" = "User" }
+    error_message = "KV officer grants must carry principal_type ServicePrincipal/User"
   }
 }
 

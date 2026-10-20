@@ -19,8 +19,11 @@ postgres_backup_retention_days = 7
 law_daily_quota_gb = 0.5
 ingress_pip_zones  = ["1", "2", "3"]
 
-# Object IDs granted Key Vault Secrets Officer on the env KV: whoever applies
-# locally, and whoever sets llm-api-key out of band
-# (az keyvault secret set --vault-name <kv> --name llm-api-key --value ...).
+# Key Vault Secrets Officer on the env KV (mirrors envs/global/global.tfvars).
 # gh-bbm-prod already has Secrets Officer on the data RG via bootstrap.
-secret_officer_object_ids = []
+secret_officer_sp_object_ids = [] # extra service principals (CI can apply)
+# Users who apply locally or set llm-api-key out of band
+# (az keyvault secret set --vault-name <kv> --name llm-api-key --value ...).
+# principal_type User: CI cannot grant these, so apply changes to this list
+# locally as a subscription Owner first; CI then sees no diff.
+secret_officer_user_object_ids = []
