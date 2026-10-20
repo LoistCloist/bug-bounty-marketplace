@@ -10,7 +10,7 @@ import {
 } from "@bbm/shared";
 import { buildApp } from "../app.js";
 import type { AuditorStakingPort } from "../chain/auditor-staking.js";
-import { createChainActions } from "../chain/actions.js";
+import { createChainActions, type ChainActions } from "../chain/actions.js";
 import { MemoryChainActionStore } from "../chain/memory-action-store.js";
 import { MemoryContractRepository } from "../contracts/memory-repository.js";
 import { MemorySourceStorage } from "../contracts/storage.js";
@@ -526,19 +526,23 @@ describe("POST /api/auditor/claim when the lock and the release both fail", () =
     const releaseError = new Error("db connection lost");
     repository.releaseClaim = vi.fn().mockRejectedValue(releaseError);
     const lockError = new Error("rpc unavailable");
-    const auditorStaking: AuditorStakingPort = {
-      stakeOf: vi.fn(),
-      activeSubmissions: vi.fn(),
-      lockSubmission: vi.fn().mockRejectedValue(lockError),
-      unlockSubmission: vi.fn(),
-    };
+    // The claim lock now goes through ChainActions; a throwing lockClaim is the
+    // lock failure the route must answer with 502 and a claim rollback.
+    const chainActions = {
+      chainConfigured: true,
+      lockClaim: vi.fn().mockRejectedValue(lockError),
+      releaseExpiredLocks: vi.fn().mockResolvedValue(0),
+      finishPendingUnlocks: vi.fn(),
+      applyVerdict: vi.fn(),
+      applyDisputeResolved: vi.fn(),
+    } as unknown as ChainActions;
     const logger = { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(), fatal: vi.fn() };
     const app = buildApp({
       repository,
       pipeline: new MemoryPipelineRepository(store),
       storage: new MemorySourceStorage(),
       config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => T0 },
-      auditorStaking,
+      chainActions,
     });
     // The app runs with logger: false, so capture what the route writes to
     // request.log by swapping in a spy logger for each request.
@@ -556,7 +560,7 @@ describe("POST /api/auditor/claim when the lock and the release both fail", () =
 
     expect(response.statusCode).toBe(502);
     expect(response.json()).toEqual({ error: "Could not lock the auditor stake on-chain; claim not applied" });
-    expect(auditorStaking.lockSubmission).toHaveBeenCalledWith(AUDITOR_A);
+    expect(chainActions.lockClaim).toHaveBeenCalledWith(record.contract.id, AUDITOR_A);
     expect(repository.releaseClaim).toHaveBeenCalledWith(record.contract.id, AUDITOR_A);
     expect(logger.error).toHaveBeenCalledWith(
       { err: lockError, contractId: record.contract.id, auditorId: AUDITOR_A },
