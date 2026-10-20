@@ -1,0 +1,95 @@
+"""Sandbox jobs: re-run a submitted PoC and record the verdict.
+
+Passed → PoC Passed, finding Verified, challenge window opens.
+Failed → PoC Failed, finding Rejected.
+Sandbox outage → retried; the finding stays Submitted.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+
+import psycopg
+from psycopg.types.json import Jsonb
+
+from .analysis_job import JobOutcome
+from .config import Settings
+from .jobs import Job, complete
+from .pgsafe import without_nul
+from .sandbox import SandboxResult, build_tarball, run_poc
+from .schema_base import to_iso_z
+from .solc import UnsupportedSolcError, pick_solc
+from .storage import read_source
+
+log = logging.getLogger(__name__)
+
+PocRunner = Callable[[bytes, str, Settings], SandboxResult]
+
+_LOAD = """
+SELECT p.id, p.test_file_reference, p.sandbox_status, f.id AS finding_id,
+       c.filename, c.source_reference
+  FROM poc_submissions p
+  JOIN findings f ON f.id = p.finding_id
+  JOIN contracts c ON c.id = f.contract_id
+ WHERE p.id = %s
+"""
+
+
+def run_sandbox_job(
+    conn: psycopg.Connection, job: Job, settings: Settings, runner: PocRunner = run_poc
+) -> JobOutcome:
+    row = conn.execute(_LOAD, (job.subject_id,)).fetchone()
+    # Don't hold the read transaction through a Docker run of up to minutes.
+    conn.commit()
+    if row is None:
+        return JobOutcome(ok=False, reason=f"PoC {job.subject_id} not found")
+    if row["sandbox_status"] != "Pending":
+        # A retry of a job whose result was already recorded: nothing to do.
+        complete(conn, job.id)
+        conn.commit()
+        return JobOutcome(ok=True)
+    if settings.source_storage_dir is None:
+        return JobOutcome(ok=False, reason="SOURCE_STORAGE_DIR is not set", retryable=True)
+
+    try:
+        target = read_source(settings.source_storage_dir, row["source_reference"])
+        poc = read_source(settings.source_storage_dir, row["test_file_reference"])
+    except FileNotFoundError as err:
+        return JobOutcome(ok=False, reason=f"Stored file missing: {err.filename}")
+    try:
+        solc_version = pick_solc(target, settings.supported_solc)
+    except UnsupportedSolcError as err:
+        return JobOutcome(ok=False, reason=str(err))
+
+    tar = build_tarball(row["filename"], target, poc, solc_version)
+    result = runner(tar, row["id"], settings)
+    if result.status is None:
+        return JobOutcome(ok=False, reason=result.infra_error, retryable=True)
+
+    now = datetime.now(UTC)
+    verified = result.status == "Passed"
+    finding_status = "Verified" if verified else "Rejected"
+    conn.execute(
+        "UPDATE poc_submissions SET sandbox_status = %s, sandbox_log = %s WHERE id = %s",
+        (result.status, without_nul(result.log), row["id"]),
+    )
+    conn.execute(
+        "UPDATE findings SET status = %s,"
+        " status_history = status_history || %s,"
+        " challenge_window_expires_at = %s"
+        " WHERE id = %s AND status = 'Submitted'",
+        (
+            finding_status,
+            Jsonb([{"status": finding_status, "changedAt": to_iso_z(now)}]),
+            now + timedelta(seconds=settings.challenge_window_s) if verified else None,
+            row["finding_id"],
+        ),
+    )
+    complete(conn, job.id)
+    conn.commit()
+    log.info(
+        "PoC %s: %s → finding %s %s", row["id"], result.status, row["finding_id"], finding_status
+    )
+    return JobOutcome(ok=True)

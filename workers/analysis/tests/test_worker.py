@@ -51,11 +51,9 @@ def test_read_source_refuses_keys_outside_the_root(tmp_path: Path):
         read_source(tmp_path, "../outside.sol")
 
 
-def test_settings_only_claim_analysis_jobs_until_the_sandbox_lands():
-    # Sandbox jobs are left queued for the sandbox runner (next PR) instead
-    # of being claimed and failed here.
+def test_settings_claim_sandbox_jobs_only_when_enabled():
     assert Settings.from_env({}).job_kinds == ("analysis",)
-    assert Settings.from_env({"SANDBOX_ENABLED": "true"}).job_kinds == ("analysis",)
+    assert Settings.from_env({"SANDBOX_ENABLED": "true"}).job_kinds == ("analysis", "sandbox")
 
 
 def test_run_keeps_polling_after_a_database_error(monkeypatch, tmp_path):
@@ -126,3 +124,21 @@ def test_load_dotenv_strips_matching_quotes(tmp_path: Path):
     env: dict[str, str] = {}
     main.load_dotenv(env_file, env)
     assert env == {"A": "quoted value", "B": "single", "C": '"unbalanced'}
+
+
+def test_handle_dispatches_sandbox_jobs(pg_conn, tmp_path, monkeypatch, test_database_url):
+    from analysis.analysis_job import JobOutcome
+
+    insert_job(pg_conn, "sandbox", "poc_a")
+    job = claim_next(pg_conn, 600, 3)
+    seen = []
+
+    def fake(conn, job, settings):
+        seen.append(job.subject_id)
+        return JobOutcome(ok=False, reason="Docker CLI not found", retryable=True)
+
+    monkeypatch.setattr(main, "run_sandbox_job", fake)
+    main.handle(job, _settings(tmp_path, test_database_url), explainer=None)
+    assert seen == ["poc_a"]
+    row = pg_conn.execute("SELECT status, last_error FROM jobs WHERE id = %s", (job.id,)).fetchone()
+    assert (row["status"], row["last_error"]) == ("queued", "Docker CLI not found")

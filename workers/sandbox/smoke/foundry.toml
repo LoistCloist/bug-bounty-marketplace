@@ -1,0 +1,9 @@
+# Same settings the worker generates for each PoC run (see
+# workers/analysis/src/bbm_analysis/sandbox.py).
+[profile.default]
+src = "src"
+test = "test"
+libs = []
+offline = true
+solc = "/opt/solc/solc-0.8.28"
+remappings = ["forge-std/=/opt/forge-std/src/"]

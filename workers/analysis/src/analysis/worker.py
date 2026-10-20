@@ -20,6 +20,7 @@ from .config import Settings
 from .db import connect
 from .jobs import Job, claim_next, expire_exhausted, fail
 from .llm import Explainer, make_explainer
+from .sandbox_job import run_sandbox_job
 
 log = logging.getLogger("analysis.worker")
 
@@ -58,6 +59,8 @@ def _handle(job: Job, settings: Settings, explainer: Explainer | None) -> None:
         try:
             if job.kind == "analysis":
                 outcome = run_analysis_job(conn, job, settings, explainer)
+            elif job.kind == "sandbox":
+                outcome = run_sandbox_job(conn, job, settings)
             else:
                 outcome = JobOutcome(ok=False, reason=f"No handler for {job.kind} jobs")
         except Exception as err:  # a bug or an outage: let the job be retried
