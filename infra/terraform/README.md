@@ -15,18 +15,21 @@ infra/terraform/
     budget/              subscription or resource-group cost budget with email alerts
     acr/                 container registry (Basic, admin user disabled)
     observability/       Log Analytics workspace (daily cap, 30-day retention)
+    aca-app-stack/       ACA environment + api (Postgres sidecar), web, optional analysis
   stacks/
     bootstrap/           state storage, long-lived RGs, providers, OIDC identities, sub budget
     global/              ACR, shared LAW, id-bbm-aca-pull, shared Key Vault, RG budgets
+    aca-ephemeral/       per-run / per-PR Container Apps environment (test, preview)
   envs/
     global/              bootstrap.tfvars, global.tfvars, backend.hcl
+    test/, preview/      aca.tfvars, backend.hcl (state key from $TF_STATE_KEY)
   scripts/
     tf.sh                wrapper: picks stack dir, var-file, backend config and state key
+    janitor.sh           deletes expired ephemeral ACA resources, stale test state, old images
 ```
 
-Later branches add the `data`, `compute` and `aca-ephemeral` stacks, their
-modules, the `envs/{staging,prod,test,preview}` directories, and
-`scripts/{env-power.sh,janitor.sh}`. `tf.sh` already supports those stacks.
+Later branches add the `data` and `compute` stacks, their modules, the
+`envs/{staging,prod}` directories, and `scripts/env-power.sh`. `tf.sh` already supports those stacks.
 
 ## Running Terraform: `scripts/tf.sh`
 
@@ -101,6 +104,73 @@ namespace in `preregistered_resource_providers`; the stack then imports it
 instead of registering it. You can also import it by hand:
 `terraform import 'azurerm_resource_provider_registration.this["Microsoft.Network"]' /subscriptions/<sub>/providers/Microsoft.Network`.
 
+## Ephemeral environments: `aca-ephemeral`
+
+One Consumption Container Apps environment `cae-bbm-<env_name>` (no VNet,
+logs to the shared LAW) in the bootstrap-owned RG `rg-bbm-<kind>-eus2`, with:
+
+- `<env_name>-api`: api (port 3001, `/health`) plus a `postgres` sidecar
+  (`<acr>/mirror/postgres:16-alpine`) on `localhost:5432`. The password is a
+  `random_password` held as an ACA secret; `DATABASE_URL` is a secret ref.
+  min = max = 1 replica because the database lives in the replica, and data
+  dies with the environment.
+- `<env_name>-web`: web (port 3000, `/healthz`). `API_INTERNAL_URL` is
+  `https://<api ingress FQDN>`. Calls between apps in one environment stay
+  inside it. Plain `http://<app>` would be redirected to HTTPS because
+  ingress has `allow_insecure_connections = false`. min replicas: 1 for
+  test, 0 for preview. max replicas: 2.
+- `<env_name>-analysis` (only with `analysis_enabled = true`): internal ingress on 8000.
+- Every app pulls from ACR as `id-bbm-aca-pull`. Everything is tagged
+  `ephemeral=true` and `expires_on=<RFC3339>`. The expiry is a `time_static`
+  timestamp plus `ttl_hours` (test 6, preview 168). It is re-stamped when
+  the image tags change, so a preview that keeps getting pushes stays alive.
+
+App names are `<env_name>-<app>` because container app names are unique per
+RG. `env_name` must match `run-<id>-<attempt>` or `pr-<n>` and be at most 23
+characters.
+
+Inputs come from `envs/<kind>/aca.tfvars` plus `TF_VAR_*` set by the workflow:
+
+| variable | test (`integration-azure.yml`) | preview (`preview.yml`) |
+|---|---|---|
+| `TF_VAR_subscription_id` | `vars.AZURE_SUBSCRIPTION_ID` | same |
+| `TF_VAR_env_name` | `run-${{ github.run_id }}-${{ github.run_attempt }}` | `pr-<n>` |
+| `TF_VAR_image_tag` | `sha-<7>` | `pr-<n>-sha-<7>` |
+| `TF_VAR_web_image_tag` | (unset, so `image_tag`) | `pr-<n>-sha-<7>-mocked` |
+| `TF_VAR_tfstate_resource_group` | `vars.TFSTATE_RG` | same |
+| `TF_VAR_tfstate_account` | `vars.TFSTATE_ACCOUNT` | same |
+| `TF_STATE_KEY` | `test/run-<run_id>-<attempt>.tfstate` | `preview/pr-<n>.tfstate` |
+
+`tfstate_resource_group` and `tfstate_account` tell the stack where to read
+`global.tfstate` (ACR login server, LAW ID, pull identity, suffix). `tf.sh`
+only passes `TFSTATE_RG` / `TFSTATE_ACCOUNT` to the backend, so the workflow
+also sets these two `TF_VAR_`s.
+
+Outputs: `web_url`, `api_url` (both `https://...`), `resource_group`, `environment_name`.
+
+**Pipeline test run:**
+
+```sh
+export TF_STATE_KEY=test/run-$RUN_ID-$ATTEMPT.tfstate
+./scripts/tf.sh aca-ephemeral test init
+./scripts/tf.sh aca-ephemeral test apply -auto-approve
+WEB_URL=$(./scripts/tf.sh aca-ephemeral test output -raw web_url)
+# ... smoke / integration / e2e against $WEB_URL and api_url ...
+./scripts/tf.sh aca-ephemeral test destroy -auto-approve   # if: always()
+```
+
+**Preview:** on every push to the PR, run `apply` with
+`TF_STATE_KEY=preview/pr-<n>.tfstate`. The sticky PR comment uses
+`web_url`. When the PR closes, run `destroy` with the same key.
+
+**Janitor** (`scripts/janitor.sh`, run by `infra-janitor.yml` on a schedule):
+dry run by default. `--apply` deletes container apps, then managed
+environments, in `rg-bbm-{test,preview}-eus2` that are tagged
+`ephemeral=true` and past `expires_on`. It also deletes `test/` state blobs
+older than 24 hours in `$TFSTATE_ACCOUNT`. `--acr-purge` (needs `$ACR_NAME`)
+removes `bbm/*` tags `pr-*` and `sha-*` older than 30 days, keeping the 10
+newest per repository, plus untagged manifests. Requires `az login`.
+
 ## Static checks (no Azure credentials needed)
 
 ```sh
@@ -110,6 +180,8 @@ terraform fmt -check -recursive .
 (cd modules/naming && terraform init -backend=false && terraform test)
 (cd stacks/bootstrap && terraform test)   # mock providers
 (cd stacks/global && terraform test)      # mock providers
+(cd modules/aca-app-stack && terraform init -backend=false && terraform test)
+(cd stacks/aca-ephemeral && terraform init -backend=false && terraform test)
 tflint --init && tflint --recursive --config "$(pwd)/.tflint.hcl"
 shellcheck scripts/*.sh
 ```
