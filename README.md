@@ -136,15 +136,24 @@ database and chain, starts Postgres and a local anvil chain, deploys the
 contracts with a 60-second challenge window, then starts the API (pointed at
 the deployment through `docker-compose.chain.yml`) and the analysis service
 with the PoC sandbox. It prints the deployment and `GET /api/chain`.
-On-chain verdicts, payouts, disputes and the in-browser wallet arrive with
-the follow-up PRs of the on-chain lifecycle plan
-(`docs/superpowers/plans/2026-10-20-onchain-lifecycle.md`).
+
+Run the web app in live chain mode against it. `NEXT_PUBLIC_LIVE_CHAIN`
+sends the chain description, sign-in and every lifecycle route (funding,
+cancel, reclaim, profile, disputes, rulings) to the real API. Each role signs
+its transactions in the browser with its anvil account (developer, auditor,
+arbiter) and signs in to the API with a signed message when you switch roles.
+Without `NEXT_PUBLIC_LIVE_CHAIN` the chain stays mocked, so the app never
+signs anything.
 
 ```sh
 pnpm stack:demo
-NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled \
+NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled NEXT_PUBLIC_LIVE_CHAIN=enabled \
   API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
 ```
+
+If a step fails after its transaction went through (for example the API was
+unreachable), repeat it: a step that already happened on-chain goes straight
+to the API call.
 
 The overlay uses anvil's well-known dev keys (local demo only). If an image
 build fails with `error getting credentials` on WSL, Docker Desktop's

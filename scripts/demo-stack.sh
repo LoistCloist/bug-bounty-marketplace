@@ -38,4 +38,4 @@ echo
 step "GET /api/chain"
 curl -sf http://localhost:3001/api/chain
 echo
-echo "Demo stack ready. Web: NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev"
+echo "Demo stack ready. Web: NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled NEXT_PUBLIC_LIVE_CHAIN=enabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev"

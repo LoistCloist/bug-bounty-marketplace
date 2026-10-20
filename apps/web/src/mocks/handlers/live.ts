@@ -18,11 +18,6 @@ export const LIVE_ROUTES: ReadonlyArray<{ method: "GET" | "POST"; path: string }
   { method: "GET", path: "/api/auditor/queue" },
   { method: "POST", path: "/api/auditor/claim" },
   { method: "POST", path: "/api/auditor/poc" },
-  // Harmless without a chain: the API answers configured:false, and sign-in
-  // is only used when it says configured:true.
-  { method: "GET", path: "/api/chain" },
-  { method: "POST", path: "/api/auth/nonce" },
-  { method: "POST", path: "/api/auth/login" },
 ];
 
 /**
@@ -32,6 +27,9 @@ export const LIVE_ROUTES: ReadonlyArray<{ method: "GET" | "POST"; path: string }
  */
 export const LIVE_CHAIN_ROUTES: ReadonlyArray<{ method: "GET" | "POST"; path: string }> = [
   ...LIVE_ROUTES,
+  // Only here: a real chain description switches the app to signing
+  // transactions, which needs every lifecycle route below to be real too.
+  { method: "GET", path: "/api/chain" },
   { method: "POST", path: "/api/contracts/:id/funded" },
   { method: "POST", path: "/api/contracts/:id/cancel" },
   { method: "POST", path: "/api/contracts/:id/reclaim" },
@@ -42,7 +40,10 @@ export const LIVE_CHAIN_ROUTES: ReadonlyArray<{ method: "GET" | "POST"; path: st
   { method: "POST", path: "/api/arbiter/disputes/:id/rule" },
 ];
 
-function isLive(handler: RequestHandler, routes: ReadonlyArray<{ method: string; path: string }>): boolean {
+function isLive(
+  handler: RequestHandler,
+  routes: ReadonlyArray<{ method: string; path: string }>,
+): boolean {
   const info = handler.info as { method?: unknown; path?: unknown };
   const path = String(info.path ?? "").replace(/^\*/, "");
   return routes.some((route) => route.method === info.method && route.path === path);
@@ -50,7 +51,11 @@ function isLive(handler: RequestHandler, routes: ReadonlyArray<{ method: string;
 
 /** All handlers when `live` is false; otherwise all but the live routes (and,
  * with `chain`, all but the chain lifecycle routes too). */
-export function selectHandlers<H extends RequestHandler>(handlers: H[], live: boolean, chain = false): H[] {
+export function selectHandlers<H extends RequestHandler>(
+  handlers: H[],
+  live: boolean,
+  chain = false,
+): H[] {
   if (!live && !chain) return handlers;
   const routes = chain ? LIVE_CHAIN_ROUTES : LIVE_ROUTES;
   return handlers.filter((handler) => !isLive(handler, routes));

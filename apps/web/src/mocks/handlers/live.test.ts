@@ -43,15 +43,19 @@ describe("selectHandlers", () => {
 
   it("lists the raw-output route as live even though it has no mock", () => {
     expect(LIVE_ROUTES).toContainEqual({ method: "GET", path: "/api/findings/:id/raw" });
-    expect(LIVE_ROUTES).toHaveLength(12);
+    expect(LIVE_ROUTES).toHaveLength(9);
   });
 });
 
 describe("selectHandlers with the chain", () => {
   const withChain = [...chainHandlers, ...all];
 
-  it("pipeline live mode also sends GET /api/chain to the API", () => {
-    expect(routes(selectHandlers(withChain, true))).not.toContain("GET */api/chain");
+  it("pipeline live mode keeps the chain mocked, so the app never signs against a half-mocked API", () => {
+    expect(routes(selectHandlers(withChain, true))).toContain("GET */api/chain");
+  });
+
+  it("chain live mode sends GET /api/chain to the API", () => {
+    expect(routes(selectHandlers(withChain, true, true))).not.toContain("GET */api/chain");
   });
 
   it("chain live mode drops every lifecycle route too", () => {
