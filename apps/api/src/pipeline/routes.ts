@@ -13,6 +13,11 @@ import type { AuditorStakingPort } from "../chain/auditor-staking.js";
 import type { PipelineConfig } from "./config.js";
 import { canTransitionFinding } from "../status/transitions.js";
 import type { PipelineRepository } from "./repository.js";
+import type { PocVerdictSource } from "./verdict-source.js";
+
+/** Minimum AuditorStaking.stakeOf an auditor needs before a PoC is accepted:
+ * 0.1 ETH, matching AuditorStaking.REQUIRED_STAKE. */
+export const REQUIRED_STAKE_WEI = "100000000000000000";
 
 export interface PipelineRouteDeps {
   contracts: ContractRepository;
@@ -22,6 +27,12 @@ export interface PipelineRouteDeps {
   /** Present only when a chain is configured. Claims lock the auditor's stake
    * on-chain; without it claims are local only. */
   auditorStaking?: AuditorStakingPort;
+  /** Read-only stake source for the PoC stake gate. Null when no chain is
+   * configured: the gate is then skipped and logged. Kept separate from
+   * `auditorStaking` so the gate does not depend on the claim-lock flag. */
+  stakeReader: Pick<AuditorStakingPort, "stakeOf"> | null;
+  /** Sandbox verdict source for PoC uploads. */
+  verdicts: PocVerdictSource;
 }
 
 const ADDRESS = /^0x[a-fA-F0-9]{40}$/;
@@ -46,7 +57,7 @@ export function pocStorageKey(pocId: string, sha256: string): string {
 /** Routes backed by the analysis pipeline: findings, analysis status, the
  * auditor queue and claims, and PoC submission. */
 export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRouteDeps): void {
-  const { contracts, pipeline, storage, config, auditorStaking } = deps;
+  const { contracts, pipeline, storage, config, auditorStaking, stakeReader, verdicts } = deps;
 
   app.get<{ Params: { id: string } }>("/api/contracts/:id/findings", async (request, reply) => {
     const now = config.now();
@@ -148,6 +159,24 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       return reply.code(409).send({ error: "Finding is not Flagged" });
     }
 
+    // Stake gate: checked before any bytes are stored, so a rejected upload
+    // leaves nothing behind.
+    if (stakeReader === null) {
+      // Not a silent pass: every skipped check is logged so a deployment
+      // without CHAIN_RPC_URL shows up in the logs.
+      console.warn(`POST /api/auditor/poc: stake check skipped for ${auditorId}, no chain configured`);
+    } else {
+      if (!ADDRESS.test(auditorId)) {
+        return reply
+          .code(400)
+          .send({ error: "auditorId must be the auditor's 0x wallet address for the stake check" });
+      }
+      const stake = (await stakeReader.stakeOf(auditorId as `0x${string}`)).toString();
+      if (compareWei(stake, REQUIRED_STAKE_WEI) < 0) {
+        return reply.code(403).send({ error: "Auditor stake is below the required stake" });
+      }
+    }
+
     const pocId = `poc_${randomUUID()}`;
     const sha256 = createHash("sha256").update(body.file.bytes).digest("hex");
     const testFileReference = pocStorageKey(pocId, sha256);
@@ -177,6 +206,12 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     if (outcome === "not_flagged") {
       return reply.code(409).send({ error: "Finding is not Flagged" });
     }
-    return reply.code(201).send(poc);
+    // The stored row is Pending until a verdict exists. Only a decided verdict
+    // is written back; the sandbox job queued above is left as it is.
+    const sandboxStatus = await verdicts.requestVerdict({ ...poc });
+    if (sandboxStatus !== "Pending") {
+      await pipeline.recordVerdict(pocId, sandboxStatus);
+    }
+    return reply.code(201).send({ ...poc, sandboxStatus });
   });
 }

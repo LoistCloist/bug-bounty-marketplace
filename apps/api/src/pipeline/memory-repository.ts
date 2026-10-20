@@ -1,4 +1,11 @@
-import type { AnalysisStatus, Bounty, Contract, Finding, PoCSubmission } from "@bbm/shared";
+import type {
+  AnalysisStatus,
+  Bounty,
+  Contract,
+  Finding,
+  PoCSubmission,
+  SandboxStatus,
+} from "@bbm/shared";
 import type { ActiveClaim } from "../contracts/repository.js";
 import { compareFindings, toAnalysisJobStatus, toFinding } from "./mapping.js";
 import type {
@@ -118,5 +125,11 @@ export class MemoryPipelineRepository implements PipelineRepository {
       updatedAt: job.createdAt,
     });
     return "ok";
+  }
+
+  async recordVerdict(pocId: string, sandboxStatus: SandboxStatus): Promise<void> {
+    const poc = this.store.pocs.get(pocId);
+    if (!poc) throw new Error(`Unknown PoC ${pocId}`);
+    poc.sandboxStatus = sandboxStatus;
   }
 }
