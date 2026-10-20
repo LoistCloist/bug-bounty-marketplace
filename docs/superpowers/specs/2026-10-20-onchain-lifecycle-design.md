@@ -90,8 +90,9 @@ Users sign their own transactions. The API signs only operator actions.
 - Indexer: started in `index.ts` with the Postgres repository and lock. On
   `FindingVerified` (and `Unfrozen` with `auditorWon`) it also sets
   `challenge_window_expires_at = verifiedAt + challengeWindow` (window read
-  once from the escrow). On `Funded` it sets `bounties.funded_at`. On
-  `PayoutCredited` → `Paid` and the contract → `Resolved`.
+  once from the escrow). On `PayoutCredited` → `Paid` and the contract →
+  `Resolved`. `bounties.funded_at` is set only by `POST
+  /api/contracts/:id/funded`, which confirms the bounty on-chain.
 - Postgres finding-status writes use `UPDATE … WHERE id = $1 AND status =
   $current` and append to `status_history`. (#39's Postgres action store is
   reused if it already implements this; otherwise it is added there.)
@@ -161,8 +162,7 @@ profile (optional `WeiSchema`).
 - A route whose on-chain confirmation fails returns 409 with the mismatch;
   the indexer later reconciles status anyway.
 - The verdict loop, keeper and indexer log and retry; none of them crash the
-  API. If the chain is down at startup the API starts without chain features
-  and logs it.
+  API. The demo script starts Anvil and deploys before the API starts.
 
 ## 5. Delivery (one PR each, into main, fresh reviewer before merge)
 
