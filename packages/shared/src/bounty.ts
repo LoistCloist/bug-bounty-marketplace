@@ -1,16 +1,15 @@
 import { z } from "zod";
 import { IdSchema, TimestampSchema } from "./common";
+import { PositiveWeiSchema } from "./wei";
 
 /**
- * Escrowed bounty funds for a contract. Kept deliberately simple (a numeric
- * amount + currency code) rather than modeling real on-chain token
- * mechanics - that detail belongs to the contracts/ workspace, not this
- * API-contract package.
+ * Escrowed bounty funds for a contract. `amount` is wei as a decimal string,
+ * matching the on-chain uint256 the BountyEscrow contract stores.
  */
 export const BountySchema = z.object({
   id: IdSchema,
   contractId: IdSchema,
-  amount: z.number().positive(),
+  amount: PositiveWeiSchema,
   currency: z.string().min(1),
   fundedAt: TimestampSchema,
   deadline: TimestampSchema,

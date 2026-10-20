@@ -82,14 +82,14 @@ describe("ContractSourceSizeSchema", () => {
 describe("ContractSubmissionFieldsSchema", () => {
   const valid = {
     developerAddress: address,
-    bountyAmount: "2.5",
+    bountyAmount: "2500000000000000000",
     currency: "USDC",
     deadline: later,
   };
 
-  it("coerces a multipart string amount to a number", () => {
+  it("keeps a multipart wei amount as a decimal string", () => {
     const parsed = ContractSubmissionFieldsSchema.parse(valid);
-    expect(parsed.bountyAmount).toBe(2.5);
+    expect(parsed.bountyAmount).toBe("2500000000000000000");
   });
 
   it("defaults the currency to ETH when omitted", () => {
@@ -97,7 +97,7 @@ describe("ContractSubmissionFieldsSchema", () => {
     expect(ContractSubmissionFieldsSchema.parse(withoutCurrency).currency).toBe("ETH");
   });
 
-  it("rejects a non-positive or non-numeric bounty amount", () => {
+  it("rejects a zero, non-numeric or leading-zero bounty amount", () => {
     expect(ContractSubmissionFieldsSchema.safeParse({ ...valid, bountyAmount: "0" }).success).toBe(
       false,
     );
@@ -120,7 +120,7 @@ describe("BountySchema", () => {
   const valid = {
     id: "bounty_1",
     contractId: "contract_1",
-    amount: 1000,
+    amount: "1000",
     currency: "USDC",
     fundedAt: now,
     deadline: later,
@@ -130,12 +130,12 @@ describe("BountySchema", () => {
     expect(BountySchema.safeParse(valid).success).toBe(true);
   });
 
-  it("rejects a non-positive amount", () => {
-    expect(BountySchema.safeParse({ ...valid, amount: 0 }).success).toBe(false);
+  it("rejects a zero amount", () => {
+    expect(BountySchema.safeParse({ ...valid, amount: "0" }).success).toBe(false);
   });
 
-  it("rejects a wrong-typed amount", () => {
-    expect(BountySchema.safeParse({ ...valid, amount: "1000" }).success).toBe(false);
+  it("rejects a numeric (non-string) amount", () => {
+    expect(BountySchema.safeParse({ ...valid, amount: 1000 }).success).toBe(false);
   });
 });
 
@@ -249,7 +249,7 @@ describe("AuditorProfileSchema", () => {
   const valid = {
     id: "auditor_1",
     address,
-    stake: 500,
+    stake: "500000000000000000",
     reputation: 12.5,
     claimedContractIds: ["contract_1"],
   };
@@ -259,7 +259,7 @@ describe("AuditorProfileSchema", () => {
   });
 
   it("rejects a negative stake", () => {
-    expect(AuditorProfileSchema.safeParse({ ...valid, stake: -1 }).success).toBe(false);
+    expect(AuditorProfileSchema.safeParse({ ...valid, stake: "-1" }).success).toBe(false);
   });
 
   it("rejects a malformed address", () => {

@@ -11,8 +11,8 @@
       "minLength": 1
     },
     "amount": {
-      "type": "number",
-      "exclusiveMinimum": 0
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d{0,77})$"
     },
     "currency": {
       "type": "string",

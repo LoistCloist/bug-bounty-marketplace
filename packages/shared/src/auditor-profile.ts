@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { AddressSchema, IdSchema } from "./common";
+import { WeiSchema } from "./wei";
 
 export const AuditorProfileSchema = z.object({
   id: IdSchema,
   address: AddressSchema,
-  /** Amount currently staked in escrow, slashable on a losing dispute ruling. */
-  stake: z.number().nonnegative(),
+  /** Wei currently staked, slashable on a losing dispute ruling. */
+  stake: WeiSchema,
   /** Simple numeric reputation score; higher is better. */
   reputation: z.number(),
   claimedContractIds: z.array(IdSchema).default([]),
