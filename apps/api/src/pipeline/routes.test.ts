@@ -441,3 +441,57 @@ describe("POST /api/auditor/poc when the claim lapses mid-request", () => {
     expect(response.json()).toEqual({ error: "You do not hold an active claim on this contract" });
   });
 });
+
+describe("POST /api/auditor/claim when the lock and the release both fail", () => {
+  const AUDITOR_A = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as Address;
+
+  it("answers 502, logs both failures, and leaves the claim standing until it expires", async () => {
+    const store = new MemoryStore();
+    const repository = new MemoryContractRepository(store);
+    const releaseError = new Error("db connection lost");
+    repository.releaseClaim = vi.fn().mockRejectedValue(releaseError);
+    const lockError = new Error("rpc unavailable");
+    const auditorStaking: AuditorStakingPort = {
+      stakeOf: vi.fn(),
+      activeSubmissions: vi.fn(),
+      lockSubmission: vi.fn().mockRejectedValue(lockError),
+      unlockSubmission: vi.fn(),
+    };
+    const logger = { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(), fatal: vi.fn() };
+    const app = buildApp({
+      repository,
+      pipeline: new MemoryPipelineRepository(store),
+      storage: new MemorySourceStorage(),
+      config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => T0 },
+      auditorStaking,
+    });
+    // The app runs with logger: false, so capture what the route writes to
+    // request.log by swapping in a spy logger for each request.
+    app.addHook("onRequest", async (request) => {
+      request.log = logger as unknown as typeof request.log;
+    });
+    const record = makeContract();
+    await repository.insertContract(record);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/auditor/claim",
+      payload: { contractId: record.contract.id, auditorId: AUDITOR_A },
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({ error: "Could not lock the auditor stake on-chain; claim not applied" });
+    expect(auditorStaking.lockSubmission).toHaveBeenCalledWith(AUDITOR_A);
+    expect(repository.releaseClaim).toHaveBeenCalledWith(record.contract.id, AUDITOR_A);
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: lockError, contractId: record.contract.id, auditorId: AUDITOR_A },
+      "lockSubmission failed; releasing claim",
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: releaseError, contractId: record.contract.id, auditorId: AUDITOR_A },
+      "releaseClaim failed",
+    );
+    // The release failed, so the claim is still held (it expires after the window).
+    expect((await repository.findActiveClaim(record.contract.id, T0))?.auditorId).toBe(AUDITOR_A);
+  });
+});
