@@ -7,6 +7,13 @@ describeRepositories(
   () => {
     const store = new MemoryStore();
     return {
+      reset: async () => {
+        store.contracts.clear();
+        store.bounties.clear();
+        store.findings.clear();
+        store.pocs.clear();
+        store.jobs.clear();
+      },
       contracts: new MemoryContractRepository(store),
       pipeline: new MemoryPipelineRepository(store),
       seedFinding: async (record) => {

@@ -11,7 +11,8 @@ export interface NewContractRecord {
 export type QueueItem = Contract & { bounty: { amount: Wei; currency: string } };
 
 export type ClaimResult =
-  { ok: true; contract: Contract } | { ok: false; reason: "not_found" | "not_open" };
+  | { ok: true; contract: Contract }
+  | { ok: false; reason: "not_found" | "not_open" | "auditor_has_claim" };
 
 export interface ActiveClaim {
   auditorId: string;
@@ -30,7 +31,9 @@ export interface ContractRepository {
   findContractById(id: string, now?: Date): Promise<Contract | null>;
   /** Newest first, optionally only one developer's (address match ignores case). */
   listContracts(filter: { developerAddress?: string }, now?: Date): Promise<Contract[]>;
-  /** Atomic: of two simultaneous claims, exactly one succeeds. */
+  /** Atomic: of two simultaneous claims, exactly one succeeds. An auditor may
+   * hold one claim at a time: the claim is refused with "auditor_has_claim"
+   * while the auditor has another active claim or a claim lock state. */
   claimContract(
     contractId: string,
     auditorId: string,

@@ -41,6 +41,27 @@ describeRepositories(
       listQueue: (now) => repo.listQueue(now),
       findActiveClaim: (id, now) => repo.findActiveClaim(id, now),
     };
+    // Deletes every row the tests inserted so far, so a shared dev database
+    // keeps no test rows.
+    const purge = async () => {
+      const client = await db.connect();
+      await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM jobs WHERE subject_id = ANY($1)
+            OR subject_id IN (SELECT p.id FROM poc_submissions p JOIN findings f ON f.id = p.finding_id
+                               WHERE f.contract_id = ANY($1))`,
+        [created],
+      );
+      await client.query(
+        "DELETE FROM poc_submissions WHERE finding_id IN (SELECT id FROM findings WHERE contract_id = ANY($1))",
+        [created],
+      );
+      await client.query("DELETE FROM findings WHERE contract_id = ANY($1)", [created]);
+      await client.query("DELETE FROM contracts WHERE id = ANY($1)", [created]);
+      await client.query("DELETE FROM bounties WHERE contract_id = ANY($1)", [created]);
+      await client.query("COMMIT");
+      client.release();
+    };
     return {
       contracts,
       pipeline: new PgPipelineRepository(db),
@@ -82,25 +103,11 @@ describeRepositories(
         );
         return result.rows;
       },
-      close: async () => {
-        const client = await db.connect();
-        await client.query("BEGIN");
-        await client.query(
-          `DELETE FROM jobs WHERE subject_id = ANY($1)
-              OR subject_id IN (SELECT p.id FROM poc_submissions p JOIN findings f ON f.id = p.finding_id
-                                 WHERE f.contract_id = ANY($1))`,
-          [created],
-        );
-        await client.query(
-          "DELETE FROM poc_submissions WHERE finding_id IN (SELECT id FROM findings WHERE contract_id = ANY($1))",
-          [created],
-        );
-        await client.query("DELETE FROM findings WHERE contract_id = ANY($1)", [created]);
-        await client.query("DELETE FROM contracts WHERE id = ANY($1)", [created]);
-        await client.query("DELETE FROM bounties WHERE contract_id = ANY($1)", [created]);
-        await client.query("COMMIT");
-        client.release();
+      reset: async () => {
+        await purge();
+        created.length = 0;
       },
+      close: purge,
     };
   },
   { concurrent: true, skip: !pool },

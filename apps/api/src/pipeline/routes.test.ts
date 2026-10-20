@@ -10,6 +10,8 @@ import {
 } from "@bbm/shared";
 import { buildApp } from "../app.js";
 import type { AuditorStakingPort } from "../chain/auditor-staking.js";
+import { createChainActions, type ChainActions } from "../chain/actions.js";
+import { MemoryChainActionStore } from "../chain/memory-action-store.js";
 import { MemoryContractRepository } from "../contracts/memory-repository.js";
 import { MemorySourceStorage } from "../contracts/storage.js";
 import { multipartBody } from "../testing/http.js";
@@ -341,19 +343,37 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
   function chainSetup(lockImpl: (auditor: Address) => Promise<Hash> = async () => LOCK_HASH) {
     const store = new MemoryStore();
     const repository = new MemoryContractRepository(store);
-    const lock = vi.fn(lockImpl);
+    const clock = { now: T0 };
+    // Keeps the lock count the way AuditorStaking does, since the chain actions
+    // read it before each unlock.
+    let active = 0n;
+    const lock = vi.fn(async (auditor: Address) => {
+      const hash = await lockImpl(auditor);
+      active += 1n;
+      return hash;
+    });
+    const unlock = vi.fn(async () => {
+      active -= 1n;
+      return LOCK_HASH;
+    });
     const auditorStaking: AuditorStakingPort = {
       stakeOf: vi.fn(),
-      activeSubmissions: vi.fn(),
+      activeSubmissions: vi.fn(async () => active),
       lockSubmission: lock,
-      unlockSubmission: vi.fn(),
+      unlockSubmission: unlock,
     };
+    const chainActions = createChainActions({
+      store: new MemoryChainActionStore(store),
+      auditorStaking,
+      claimLockEnabled: true,
+      now: () => clock.now,
+    });
     const app = buildApp({
       repository,
       pipeline: new MemoryPipelineRepository(store),
       storage: new MemorySourceStorage(),
-      config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => T0 },
-      auditorStaking,
+      config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => clock.now },
+      chainActions,
     });
     const seedContract = async () => {
       const record = makeContract();
@@ -362,7 +382,11 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     };
     const claim = (contractId: string, auditorId: string) =>
       app.inject({ method: "POST", url: "/api/auditor/claim", payload: { contractId, auditorId } });
-    return { app, repository, lock, seedContract, claim };
+    const queue = () => app.inject({ method: "GET", url: "/api/auditor/queue" });
+    const advance = (seconds: number) => {
+      clock.now = new Date(clock.now.getTime() + seconds * 1000);
+    };
+    return { app, repository, lock, unlock, seedContract, claim, queue, advance };
   }
 
   it("locks the auditor's stake after a successful claim", async () => {
@@ -384,6 +408,19 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
 
     const second = await claim(contract.id, AUDITOR_B);
     expect(second.statusCode).toBe(409);
+    expect(lock).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when the auditor already holds another claim, and does not lock", async () => {
+    const { seedContract, claim, lock } = chainSetup();
+    const first = await seedContract();
+    const second = await seedContract();
+    expect((await claim(first.id, AUDITOR_A)).statusCode).toBe(200);
+    lock.mockClear();
+
+    const response = await claim(second.id, AUDITOR_A);
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "auditor already holds an active claim" });
     expect(lock).not.toHaveBeenCalled();
   });
 
@@ -414,6 +451,34 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     expect(response.statusCode).toBe(400);
     expect(lock).not.toHaveBeenCalled();
     expect(await repository.findActiveClaim(contract.id, T0)).toBeNull();
+  });
+
+  it("releases a lapsed lock once, on the first queue read after expiry", async () => {
+    const { seedContract, claim, lock, unlock, queue, advance } = chainSetup();
+    const contract = await seedContract();
+    await claim(contract.id, AUDITOR_A);
+    expect(lock).toHaveBeenCalledTimes(1);
+
+    advance(CLAIM_WINDOW_SECONDS + 1);
+    expect((await queue()).statusCode).toBe(200);
+    expect(unlock).toHaveBeenCalledTimes(1);
+    expect(unlock).toHaveBeenCalledWith(AUDITOR_A);
+
+    await queue();
+    expect(unlock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the lapsed lock before a new claim replaces it", async () => {
+    const { seedContract, claim, lock, unlock, advance } = chainSetup();
+    const contract = await seedContract();
+    await claim(contract.id, AUDITOR_A);
+
+    advance(CLAIM_WINDOW_SECONDS + 1);
+    const second = await claim(contract.id, AUDITOR_B);
+    expect(second.statusCode).toBe(200);
+    expect(unlock).toHaveBeenCalledTimes(1);
+    expect(unlock).toHaveBeenCalledWith(AUDITOR_A);
+    expect(lock).toHaveBeenLastCalledWith(AUDITOR_B);
   });
 
   it("skips the lock entirely when no chain is configured", async () => {
@@ -461,19 +526,23 @@ describe("POST /api/auditor/claim when the lock and the release both fail", () =
     const releaseError = new Error("db connection lost");
     repository.releaseClaim = vi.fn().mockRejectedValue(releaseError);
     const lockError = new Error("rpc unavailable");
-    const auditorStaking: AuditorStakingPort = {
-      stakeOf: vi.fn(),
-      activeSubmissions: vi.fn(),
-      lockSubmission: vi.fn().mockRejectedValue(lockError),
-      unlockSubmission: vi.fn(),
-    };
+    // The claim lock now goes through ChainActions; a throwing lockClaim is the
+    // lock failure the route must answer with 502 and a claim rollback.
+    const chainActions = {
+      chainConfigured: true,
+      lockClaim: vi.fn().mockRejectedValue(lockError),
+      releaseExpiredLocks: vi.fn().mockResolvedValue(0),
+      finishPendingUnlocks: vi.fn(),
+      applyVerdict: vi.fn(),
+      applyDisputeResolved: vi.fn(),
+    } as unknown as ChainActions;
     const logger = { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(), fatal: vi.fn() };
     const app = buildApp({
       repository,
       pipeline: new MemoryPipelineRepository(store),
       storage: new MemorySourceStorage(),
       config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => T0 },
-      auditorStaking,
+      chainActions,
     });
     // The app runs with logger: false, so capture what the route writes to
     // request.log by swapping in a spy logger for each request.
@@ -491,7 +560,7 @@ describe("POST /api/auditor/claim when the lock and the release both fail", () =
 
     expect(response.statusCode).toBe(502);
     expect(response.json()).toEqual({ error: "Could not lock the auditor stake on-chain; claim not applied" });
-    expect(auditorStaking.lockSubmission).toHaveBeenCalledWith(AUDITOR_A);
+    expect(chainActions.lockClaim).toHaveBeenCalledWith(record.contract.id, AUDITOR_A);
     expect(repository.releaseClaim).toHaveBeenCalledWith(record.contract.id, AUDITOR_A);
     expect(logger.error).toHaveBeenCalledWith(
       { err: lockError, contractId: record.contract.id, auditorId: AUDITOR_A },
@@ -573,7 +642,7 @@ describe("POST /api/auditor/poc verdicts and stake gate", () => {
   it("rejects a non-address auditorId when the stake check is on, without reading stake", async () => {
     const stakeOf = vi.fn(async () => 100_000_000_000_000_000n);
     const ctx = setup({ stakeOf });
-    const finding = await claimedBy(ctx, "auditor_1");
+    const finding = await claimedBy(ctx, "0x"+"a2".repeat(20));
     const response = await ctx.submitPoc(
       { findingId: finding.id, auditorId: "auditor_1" },
       { name: "Exploit.t.sol", content: poc },

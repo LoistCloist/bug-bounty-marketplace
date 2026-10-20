@@ -10,6 +10,7 @@ import type { ContractRepository, QueueItem } from "../contracts/repository.js";
 import type { SourceStorage } from "../contracts/storage.js";
 import { readMultipart } from "../http/multipart.js";
 import type { AuditorStakingPort } from "../chain/auditor-staking.js";
+import type { ChainActions } from "../chain/actions.js";
 import type { PipelineConfig } from "./config.js";
 import { canTransitionFinding } from "../status/transitions.js";
 import type { PipelineRepository } from "./repository.js";
@@ -25,11 +26,11 @@ export interface PipelineRouteDeps {
   storage: SourceStorage;
   config: PipelineConfig;
   /** Present only when a chain is configured. Claims lock the auditor's stake
-   * on-chain; without it claims are local only. */
-  auditorStaking?: AuditorStakingPort;
+   * and release it on expiry, through the chain actions. */
+  chainActions?: ChainActions;
   /** Read-only stake source for the PoC stake gate. Null when no chain is
-   * configured: the gate is then skipped and logged. Kept separate from
-   * `auditorStaking` so the gate does not depend on the claim-lock flag. */
+   * configured: the gate is then skipped and logged. Independent of the
+   * claim-lock flag. */
   stakeReader: Pick<AuditorStakingPort, "stakeOf"> | null;
   /** Sandbox verdict source for PoC uploads. */
   verdicts: PocVerdictSource;
@@ -57,7 +58,7 @@ export function pocStorageKey(pocId: string, sha256: string): string {
 /** Routes backed by the analysis pipeline: findings, analysis status, the
  * auditor queue and claims, and PoC submission. */
 export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRouteDeps): void {
-  const { contracts, pipeline, storage, config, auditorStaking, stakeReader, verdicts } = deps;
+  const { contracts, pipeline, storage, config, chainActions, stakeReader, verdicts } = deps;
 
   app.get<{ Params: { id: string } }>("/api/contracts/:id/findings", async (request, reply) => {
     const now = config.now();
@@ -83,7 +84,14 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     if (sort !== undefined && !(QUEUE_SORTS as readonly string[]).includes(sort)) {
       return reply.code(400).send({ error: `sort must be one of ${QUEUE_SORTS.join(", ")}` });
     }
-    return sortQueue(await contracts.listQueue(config.now()), sort as QueueSort | undefined);
+    const now = config.now();
+    if (chainActions) {
+      // Lazy expiry: the first queue read after a claim lapses releases its lock.
+      await chainActions.releaseExpiredLocks(now).catch((err: unknown) => {
+        request.log.error({ err }, "releaseExpiredLocks failed");
+      });
+    }
+    return sortQueue(await contracts.listQueue(now), sort as QueueSort | undefined);
   });
 
   app.post<{ Body: { contractId?: unknown; auditorId?: unknown } | undefined }>(
@@ -100,24 +108,39 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       }
       // With a chain configured, the auditorId is the auditor's on-chain
       // address, so reject anything else before the claim is written.
-      if (auditorStaking && !ADDRESS.test(auditorId)) {
+      if ((stakeReader !== null || chainActions?.chainConfigured) && !ADDRESS.test(auditorId)) {
         return reply.code(400).send({ error: "auditorId must be a 0x-prefixed address" });
       }
       const now = config.now();
       const expiresAt = new Date(now.getTime() + config.claimWindowSeconds * 1000);
+      if (chainActions) {
+        // A new claim overwrites the row, so a lapsed lock must be released
+        // first or it would never be unlocked.
+        try {
+          await chainActions.releaseExpiredLocks(now, contractId);
+        } catch (err) {
+          request.log.error({ err, contractId }, "releaseExpiredLocks failed; claim not applied");
+          return reply
+            .code(502)
+            .send({ error: "Could not release the previous claim's on-chain lock; claim not applied" });
+        }
+      }
       const result = await contracts.claimContract(contractId, auditorId, expiresAt, now);
       if (!result.ok) {
         if (result.reason === "not_found") return reply.code(404).send({ error: "Not found" });
+        if (result.reason === "auditor_has_claim") {
+          return reply.code(409).send({ error: "auditor already holds an active claim" });
+        }
         return reply.code(409).send({ error: `Contract ${contractId} is not open to claim` });
       }
-      if (!auditorStaking) return result.contract;
+      if (!chainActions) return result.contract;
 
       // Claim first (the repository decides the race), then lock. If the lock
       // fails, roll the claim back so the contract reopens and no unlocked
       // claim is left standing. If the rollback itself fails, the claim still
       // expires after the claim window.
       try {
-        await auditorStaking.lockSubmission(auditorId as `0x${string}`);
+        await chainActions.lockClaim(contractId, auditorId);
       } catch (err) {
         request.log.error({ err, contractId, auditorId }, "lockSubmission failed; releasing claim");
         await contracts.releaseClaim(contractId, auditorId).catch((releaseErr: unknown) => {
@@ -139,6 +162,10 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     const { findingId, auditorId } = body.fields;
     if (!findingId || !auditorId || !body.file) {
       return reply.code(400).send({ error: "findingId, auditorId and file are required" });
+    }
+    // Checked before the claim, so a non-address id is a 400 whatever the claim state.
+    if ((stakeReader !== null || chainActions?.chainConfigured) && !ADDRESS.test(auditorId)) {
+      return reply.code(400).send({ error: "auditorId must be a 0x-prefixed address" });
     }
     const issues = [
       ...(PocSourceFilenameSchema.safeParse(body.file.filename).error?.issues ?? []),

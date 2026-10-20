@@ -5,6 +5,7 @@ import type { ContractRepository } from "./contracts/repository.js";
 import { registerContractRoutes, CONTRACT_MULTIPART_LIMITS } from "./contracts/routes.js";
 import { MemorySourceStorage, type SourceStorage } from "./contracts/storage.js";
 import type { AuditorStakingPort } from "./chain/auditor-staking.js";
+import type { ChainActions } from "./chain/actions.js";
 import { loadPipelineConfig, type PipelineConfig } from "./pipeline/config.js";
 import { MemoryPipelineRepository, MemoryStore } from "./pipeline/memory-repository.js";
 import type { PipelineRepository } from "./pipeline/repository.js";
@@ -24,14 +25,16 @@ export interface AppOptions {
   storage?: SourceStorage;
   /** Defaults to loadPipelineConfig() (env vars, real clock). */
   config?: PipelineConfig;
-  /** Omit when no chain is configured; claims then skip the on-chain lock. */
-  auditorStaking?: AuditorStakingPort;
   /** Read-only AuditorStaking reader for the PoC stake gate. Omit or pass null
-   * when no chain is configured: the gate is then skipped and logged. */
+   * when no chain is configured: the gate is then skipped and logged. Independent
+   * of CLAIM_LOCK_ENABLED. */
   stakeReader?: Pick<AuditorStakingPort, "stakeOf"> | null;
   /** Sandbox verdict source for PoC uploads. Defaults to NotConfiguredVerdictSource,
    * which leaves every PoC Pending. */
   verdicts?: PocVerdictSource;
+  /** Omit when no chain is configured. Claims then skip the on-chain lock,
+   * and no verdict or payout is sent. */
+  chainActions?: ChainActions;
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -54,9 +57,9 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     pipeline,
     storage,
     config,
-    auditorStaking: options.auditorStaking,
     stakeReader: options.stakeReader ?? null,
     verdicts: options.verdicts ?? new NotConfiguredVerdictSource(),
+    chainActions: options.chainActions,
   });
 
   return app;

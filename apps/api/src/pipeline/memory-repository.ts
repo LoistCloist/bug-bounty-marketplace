@@ -20,6 +20,10 @@ export interface StoredContract {
   contract: Contract;
   claimedByAuditorId: string | null;
   claimExpiresAt: Date | null;
+  /** Mirrors contracts.claim_lock_status: null when the claim was never locked. */
+  claimLock: "locking" | "locked" | "unlocking" | "released" | null;
+  /** Mirrors contracts.claim_lock_before: the lock count read before a 'locking' send. */
+  claimLockBefore: bigint | null;
 }
 
 export interface StoredJob {

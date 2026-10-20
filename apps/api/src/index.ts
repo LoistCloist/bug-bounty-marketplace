@@ -1,7 +1,10 @@
 import { Pool } from "pg";
 import { buildApp } from "./app.js";
-import { buildAuditorStakingPort, createAuditorStakingFromConfig } from "./chain/clients.js";
-import { loadChainConfig } from "./chain/config.js";
+import { createAuditorStakingFromConfig, createBountyEscrowFromConfig } from "./chain/clients.js";
+import { claimLockEnabled, loadChainConfig } from "./chain/config.js";
+import { createChainActions, type ChainActions } from "./chain/actions.js";
+import { PgChainActionStore } from "./chain/pg-action-store.js";
+import { startPayoutKeeper, type PayoutKeeper } from "./chain/payout-keeper.js";
 import { PgContractRepository } from "./contracts/pg-repository.js";
 import { PgPipelineRepository } from "./pipeline/pg-repository.js";
 import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
@@ -21,24 +24,42 @@ const pool = databaseUrl
   : undefined;
 
 // CHAIN_RPC_URL selects the chain. Without it the PoC stake gate is skipped
-// (and logged on every upload) and claims stay local. The on-chain lock on
-// claim is off unless CLAIM_LOCK_ENABLED=true, because a lock with no unlock
-// (plan item 6) can strand an auditor's stake. buildAuditorStakingPort applies
-// that decision.
+// (and logged on every upload) and no chain action runs. Chain actions (claim
+// locks, verdicts, payouts) keep their bookkeeping in Postgres, so without
+// DATABASE_URL they are disabled. The on-chain claim lock is off unless
+// CLAIM_LOCK_ENABLED=true, because a lock with no unlock can strand an
+// auditor's stake; the PoC stake gate reads stake regardless of that flag.
 const chainConfig = loadChainConfig(process.env);
 if (!chainConfig) {
   console.warn("@bbm/api CHAIN_RPC_URL is unset: PoC uploads skip the auditor stake check");
 }
+if (chainConfig && !pool) {
+  console.warn("@bbm/api CHAIN_RPC_URL is set but DATABASE_URL is not; chain actions are disabled");
+}
 // The port is only constructed when a chain is configured; no RPC call is made here.
 const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
+const lockEnabled = claimLockEnabled(process.env);
+const chainActions: ChainActions | undefined =
+  chainConfig && pool
+    ? createChainActions({
+        store: new PgChainActionStore(pool),
+        bountyEscrow: createBountyEscrowFromConfig(chainConfig),
+        auditorStaking: lockEnabled && stakingPort ? stakingPort : undefined,
+        claimLockEnabled: lockEnabled,
+      })
+    : undefined;
+
 const app = buildApp({
   repository: pool ? new PgContractRepository(pool) : undefined,
   pipeline: pool ? new PgPipelineRepository(pool) : undefined,
   storage: storageDir ? new LocalSourceStorage(storageDir) : new MemorySourceStorage(),
-  auditorStaking: buildAuditorStakingPort(process.env),
   // The PoC stake gate reads stake regardless of CLAIM_LOCK_ENABLED.
   stakeReader: stakingPort,
+  chainActions,
 });
+
+/** Runs the payout keeper only when a chain is configured. */
+let payoutKeeper: PayoutKeeper | undefined;
 const port = Number(process.env.PORT ?? 3001);
 
 // app.ts builds Fastify with `logger: false` (keeps tests quiet), so
@@ -50,6 +71,22 @@ async function start(): Promise<void> {
   }
   await app.listen({ port, host: "0.0.0.0" });
   console.log(`@bbm/api listening on port ${port}`);
+  if (chainActions) {
+    const intervalSeconds = parseIntEnv(process.env.PAYOUT_KEEPER_INTERVAL_SECONDS, 60);
+    payoutKeeper = startPayoutKeeper({
+      intervalMs: intervalSeconds * 1000,
+      runOnce: async () => {
+        // Finish unlocks left in 'unlocking' first. A failure is logged here so
+        // the payout pass still runs.
+        await chainActions
+          .finishPendingUnlocks()
+          .catch((err: unknown) => console.error("@bbm/api unlock sweep failed", err));
+        const summary = await chainActions.runPayoutsOnce(new Date());
+        if (summary.due > 0) console.log(`@bbm/api payout pass: ${JSON.stringify(summary)}`);
+      },
+      onError: (err) => console.error("@bbm/api payout pass failed", err),
+    });
+  }
 }
 
 /** How long a graceful shutdown may take before the process is forced out. */
@@ -68,6 +105,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS).unref();
   try {
+    await payoutKeeper?.stop();
     await app.close();
     await pool?.end();
     process.exit(0);
