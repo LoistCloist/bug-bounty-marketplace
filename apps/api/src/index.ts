@@ -42,7 +42,7 @@ const lockEnabled = claimLockEnabled(process.env);
 const chainActions: ChainActions | undefined =
   chainConfig && pool
     ? createChainActions({
-        store: new PgChainActionStore(pool),
+        store: new PgChainActionStore(pool, { challengeWindowSeconds: chainConfig.challengeWindowSeconds }),
         bountyEscrow: createBountyEscrowFromConfig(chainConfig),
         auditorStaking: lockEnabled && stakingPort ? stakingPort : undefined,
         claimLockEnabled: lockEnabled,

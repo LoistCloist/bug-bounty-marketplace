@@ -1,10 +1,19 @@
 import type { Pool } from "pg";
 import type { FindingStatus } from "@bbm/shared";
-import type { ChainActionStore, FindingChainRef, PayoutDue } from "./action-store.js";
+import type { ChainActionStore, ChainActionStoreOptions, FindingChainRef, PayoutDue } from "./action-store.js";
+import { DEFAULT_CHALLENGE_WINDOW_SECONDS, challengeWindowEnd } from "./action-store.js";
+import { FINDING_TRANSITIONS, InvalidTransitionError, canTransitionFinding } from "../status/transitions.js";
 
 /** Postgres ChainActionStore. Columns come from db/migrations/0005_claim_locks.sql. */
 export class PgChainActionStore implements ChainActionStore {
-  constructor(private readonly pool: Pool) {}
+  private readonly challengeWindowSeconds: number;
+
+  constructor(
+    private readonly pool: Pool,
+    options: ChainActionStoreOptions = {},
+  ) {
+    this.challengeWindowSeconds = options.challengeWindowSeconds ?? DEFAULT_CHALLENGE_WINDOW_SECONDS;
+  }
 
   async getFindingStatus(findingId: string): Promise<FindingStatus | null> {
     const result = await this.pool.query<{ status: FindingStatus }>(
@@ -14,14 +23,48 @@ export class PgChainActionStore implements ChainActionStore {
     return result.rows[0]?.status ?? null;
   }
 
+  /**
+   * Moves the finding only from a status the status machine allows, in one
+   * guarded UPDATE, so a concurrent writer (the indexer, a route, the verdict
+   * loop) cannot be overwritten. Writing the current status again is a no-op.
+   * Verified also opens the challenge window; Paid also resolves the contract.
+   */
   async setFindingStatus(findingId: string, status: FindingStatus, changedAt: string): Promise<void> {
-    const result = await this.pool.query(
-      `UPDATE findings
-          SET status = $2, status_history = status_history || $3::jsonb
-        WHERE id = $1`,
-      [findingId, status, JSON.stringify([{ status, changedAt }])],
-    );
-    if (result.rowCount !== 1) throw new Error(`Finding not found: ${findingId}`);
+    const predecessors = (Object.keys(FINDING_TRANSITIONS) as FindingStatus[]).filter((from) => canTransitionFinding(from, status));
+    const windowEnd = status === "Verified" ? challengeWindowEnd(changedAt, this.challengeWindowSeconds) : null;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<{ contract_id: string }>(
+        `UPDATE findings
+            SET status = $2,
+                status_history = status_history || $3::jsonb,
+                challenge_window_expires_at = CASE WHEN $2 = 'Verified' THEN $5::timestamptz
+                                                   ELSE challenge_window_expires_at END
+          WHERE id = $1 AND status = ANY($4::text[])
+          RETURNING contract_id`,
+        [findingId, status, JSON.stringify([{ status, changedAt }]), predecessors, windowEnd],
+      );
+      if (result.rowCount === 1) {
+        if (status === "Paid") {
+          await client.query("UPDATE contracts SET status = 'Resolved' WHERE id = $1", [
+            result.rows[0]!.contract_id,
+          ]);
+        }
+        await client.query("COMMIT");
+        return;
+      }
+      await client.query("ROLLBACK");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+    const current = await this.getFindingStatus(findingId);
+    if (current === null) throw new Error(`Finding not found: ${findingId}`);
+    if (current === status) return;
+    throw new InvalidTransitionError("finding", current, status);
   }
 
   async findFinding(findingId: string): Promise<FindingChainRef | null> {
