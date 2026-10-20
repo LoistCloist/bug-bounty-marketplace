@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
+  AddressSchema,
   compareWei,
   type PoCSubmission,
   PocSourceFilenameSchema,
@@ -80,6 +81,9 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       ) {
         return reply.code(400).send({ error: "contractId and auditorId are required" });
       }
+      if (!AddressSchema.safeParse(auditorId).success) {
+        return reply.code(400).send({ error: "auditorId must be a wallet address" });
+      }
       const now = config.now();
       const expiresAt = new Date(now.getTime() + config.claimWindowSeconds * 1000);
       const result = await contracts.claimContract(contractId, auditorId, expiresAt, now);
@@ -99,6 +103,9 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
     const { findingId, auditorId } = body.fields;
     if (!findingId || !auditorId || !body.file) {
       return reply.code(400).send({ error: "findingId, auditorId and file are required" });
+    }
+    if (!AddressSchema.safeParse(auditorId).success) {
+      return reply.code(400).send({ error: "auditorId must be a wallet address" });
     }
     const issues = [
       ...(PocSourceFilenameSchema.safeParse(body.file.filename).error?.issues ?? []),

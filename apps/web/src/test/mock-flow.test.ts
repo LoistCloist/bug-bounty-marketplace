@@ -3,7 +3,7 @@ import { resetMockDb, cancelAllScheduled } from "@/mocks/db";
 import { developerApi, auditorApi } from "@/lib/api";
 import { ethToWei } from "@/lib/money";
 
-const SEED_AUDITOR_ID = "auditor_1";
+const SEED_AUDITOR_ID = "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2";
 const SEED_DEVELOPER_ADDRESS = `0x${"d1".repeat(20)}`;
 
 beforeEach(() => {

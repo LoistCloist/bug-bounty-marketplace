@@ -16,8 +16,8 @@ describe("StakeGate", () => {
     render(
       withQueryClient(
         <StakeGate
-          profile={{ id: "auditor_1", address: "0xabc", stake: ethToWei("5000"), reputation: 12, claimedContractIds: [] }}
-          auditorId="auditor_1"
+          profile={{ id: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", address: "0xabc", stake: ethToWei("5000"), reputation: 12, claimedContractIds: [] }}
+          auditorId="0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
           onStaked={vi.fn()}
         />,
       ),
@@ -33,13 +33,13 @@ describe("StakeGate", () => {
       withQueryClient(
         <StakeGate
           profile={{
-            id: "auditor_1",
+            id: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
             address: "0xabc",
             stake: REQUIRED_STAKE_WEI,
             reputation: 12,
             claimedContractIds: [],
           }}
-          auditorId="auditor_1"
+          auditorId="0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
           onStaked={vi.fn()}
         />,
       ),
@@ -55,8 +55,8 @@ describe("StakeGate", () => {
     render(
       withQueryClient(
         <StakeGate
-          profile={{ id: "auditor_1", address: "0xabc", stake: ethToWei("5000"), reputation: 12, claimedContractIds: [] }}
-          auditorId="auditor_1"
+          profile={{ id: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", address: "0xabc", stake: ethToWei("5000"), reputation: 12, claimedContractIds: [] }}
+          auditorId="0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
           onStaked={onStaked}
         />,
       ),

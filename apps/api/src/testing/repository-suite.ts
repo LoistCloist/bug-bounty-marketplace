@@ -85,7 +85,7 @@ function makePoc(findingId: string): { poc: PoCSubmission; job: NewJob } {
     poc: {
       id,
       findingId,
-      auditorId: "auditor_1",
+      auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
       testFileReference: `pocs/${id}/${"b".repeat(64)}.t.sol`,
       submittedAt: minutes(1).toISOString(),
       sandboxStatus: "Pending",
@@ -159,21 +159,21 @@ export function describeRepositories(
 
     it("claim succeeds once; a second claim is not_open", async () => {
       const { contract } = await insert();
-      const first = await h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0);
+      const first = await h.contracts.claimContract(contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", minutes(10), T0);
       expect(first).toEqual({ ok: true, contract: { ...contract, status: "Claimed" } });
-      expect(await h.contracts.claimContract(contract.id, "auditor_2", minutes(10), T0)).toEqual({
+      expect(await h.contracts.claimContract(contract.id, "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", minutes(10), T0)).toEqual({
         ok: false,
         reason: "not_open",
       });
       expect(await h.contracts.findActiveClaim(contract.id, T0)).toEqual({
-        auditorId: "auditor_1",
+        auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
         expiresAt: minutes(10),
       });
     });
 
     it("claiming an unknown contract is not_found", async () => {
       expect(
-        await h.contracts.claimContract("contract_missing", "auditor_1", minutes(10), T0),
+        await h.contracts.claimContract("contract_missing", "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", minutes(10), T0),
       ).toEqual({
         ok: false,
         reason: "not_found",
@@ -182,19 +182,19 @@ export function describeRepositories(
 
     it("an expired claim reads back as Open and can be claimed again", async () => {
       const { contract } = await insert();
-      await h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0);
+      await h.contracts.claimContract(contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", minutes(10), T0);
       expect((await h.contracts.findContractById(contract.id, minutes(9)))?.status).toBe("Claimed");
       expect((await h.contracts.findContractById(contract.id, minutes(10)))?.status).toBe("Open");
       expect(await h.contracts.findActiveClaim(contract.id, minutes(10))).toBeNull();
       const again = await h.contracts.claimContract(
         contract.id,
-        "auditor_2",
+        "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
         minutes(20),
         minutes(10),
       );
       expect(again.ok).toBe(true);
       expect(await h.contracts.findActiveClaim(contract.id, minutes(11))).toEqual({
-        auditorId: "auditor_2",
+        auditorId: "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
         expiresAt: minutes(20),
       });
     });
@@ -203,8 +203,8 @@ export function describeRepositories(
       it("of two simultaneous claims exactly one succeeds", async () => {
         const { contract } = await insert();
         const results = await Promise.all([
-          h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0),
-          h.contracts.claimContract(contract.id, "auditor_2", minutes(10), T0),
+          h.contracts.claimContract(contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", minutes(10), T0),
+          h.contracts.claimContract(contract.id, "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", minutes(10), T0),
         ]);
         expect(results.filter((r) => r.ok)).toHaveLength(1);
       });
@@ -214,8 +214,8 @@ export function describeRepositories(
       const open = await insert();
       const active = await insert();
       const expired = await insert();
-      await h.contracts.claimContract(active.contract.id, "auditor_1", minutes(30), T0);
-      await h.contracts.claimContract(expired.contract.id, "auditor_1", minutes(5), T0);
+      await h.contracts.claimContract(active.contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", minutes(30), T0);
+      await h.contracts.claimContract(expired.contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", minutes(5), T0);
       const queue = await h.contracts.listQueue(minutes(10));
       const ids = queue.map((c) => c.id);
       expect(ids).toContain(open.contract.id);
@@ -247,10 +247,10 @@ export function describeRepositories(
       expect(unclaimed[0]).toMatchObject({ claimedByAuditorId: null, claimExpiresAt: null });
       for (const f of unclaimed) FindingSchema.parse(f);
 
-      await h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0);
+      await h.contracts.claimContract(contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", minutes(10), T0);
       const claimed = await h.pipeline.listFindings(contract.id, minutes(1));
       expect(claimed[0]).toMatchObject({
-        claimedByAuditorId: "auditor_1",
+        claimedByAuditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
         claimExpiresAt: minutes(10).toISOString(),
       });
       const afterExpiry = await h.pipeline.listFindings(contract.id, minutes(10));
@@ -285,7 +285,7 @@ export function describeRepositories(
       const { contract } = await insert();
       const finding = makeFinding(contract.id);
       await h.seedFinding(finding);
-      await h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0);
+      await h.contracts.claimContract(contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", minutes(10), T0);
       const { poc, job } = makePoc(finding.id);
 
       expect(
@@ -305,7 +305,7 @@ export function describeRepositories(
       const { contract } = await insert();
       const finding = makeFinding(contract.id);
       await h.seedFinding(finding);
-      await h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0);
+      await h.contracts.claimContract(contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", minutes(10), T0);
       const first = makePoc(finding.id);
       await h.pipeline.submitPoc({ ...first, findingId: finding.id, now: first.poc.submittedAt });
 
@@ -325,8 +325,8 @@ export function describeRepositories(
     // change, so a claim that lapses (or changes hands) mid-request loses.
     for (const [label, claimant, expiresAt] of [
       ["no claim", null, null],
-      ["another auditor's claim", "auditor_2", minutes(10)],
-      ["an expired claim", "auditor_1", minutes(1)],
+      ["another auditor's claim", "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", minutes(10)],
+      ["an expired claim", "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", minutes(1)],
     ] as const) {
       it(`submitPoc with ${label} is no_claim and writes nothing`, async () => {
         const { contract } = await insert();
@@ -335,7 +335,7 @@ export function describeRepositories(
         if (claimant && expiresAt) {
           await h.contracts.claimContract(contract.id, claimant, expiresAt, T0);
         }
-        const { poc, job } = makePoc(finding.id); // auditor_1, submitted at T0 + 1 min
+        const { poc, job } = makePoc(finding.id); // seed auditor, submitted at T0 + 1 min
         expect(
           await h.pipeline.submitPoc({ poc, job, findingId: finding.id, now: poc.submittedAt }),
         ).toBe("no_claim");

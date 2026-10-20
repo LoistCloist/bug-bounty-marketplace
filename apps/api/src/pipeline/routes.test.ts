@@ -42,7 +42,7 @@ function setup() {
     store.findings.set(finding.id, finding);
     return finding;
   }
-  function claim(contractId: string, auditorId = "auditor_1") {
+  function claim(contractId: string, auditorId = "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2") {
     return app.inject({
       method: "POST",
       url: "/api/auditor/claim",
@@ -177,16 +177,16 @@ describe("POST /api/auditor/claim", () => {
     const { seedContract, claim, advance } = setup();
     const { contract } = await seedContract();
 
-    const first = await claim(contract.id, "auditor_1");
+    const first = await claim(contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2");
     expect(first.statusCode).toBe(200);
     expect(ContractSchema.parse(first.json()).status).toBe("Claimed");
 
-    const second = await claim(contract.id, "auditor_2");
+    const second = await claim(contract.id, "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2");
     expect(second.statusCode).toBe(409);
     expect(second.json()).toEqual({ error: `Contract ${contract.id} is not open to claim` });
 
     advance(CLAIM_WINDOW_SECONDS);
-    expect((await claim(contract.id, "auditor_2")).statusCode).toBe(200);
+    expect((await claim(contract.id, "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2")).statusCode).toBe(200);
   });
 
   it("requires contractId and auditorId", async () => {
@@ -206,7 +206,7 @@ describe("POST /api/auditor/poc", () => {
   async function claimedFinding(ctx: ReturnType<typeof setup>) {
     const { contract } = await ctx.seedContract();
     const finding = ctx.seedFinding(contract.id);
-    await ctx.claim(contract.id, "auditor_1");
+    await ctx.claim(contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2");
     return finding;
   }
 
@@ -215,7 +215,7 @@ describe("POST /api/auditor/poc", () => {
     const finding = await claimedFinding(ctx);
 
     const response = await ctx.submitPoc(
-      { findingId: finding.id, auditorId: "auditor_1" },
+      { findingId: finding.id, auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2" },
       { name: "Exploit.t.sol", content: poc },
     );
 
@@ -223,7 +223,7 @@ describe("POST /api/auditor/poc", () => {
     const created = PoCSubmissionSchema.parse(response.json());
     expect(created).toMatchObject({
       findingId: finding.id,
-      auditorId: "auditor_1",
+      auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
       sandboxStatus: "Pending",
     });
     const sha = createHash("sha256").update(poc).digest("hex");
@@ -239,7 +239,7 @@ describe("POST /api/auditor/poc", () => {
     const ctx = setup();
     const finding = await claimedFinding(ctx);
     const response = await ctx.submitPoc(
-      { findingId: finding.id, auditorId: "auditor_1" },
+      { findingId: finding.id, auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2" },
       { name: "Exploit.sol", content: poc },
     );
     expect(response.statusCode).toBe(400);
@@ -249,7 +249,7 @@ describe("POST /api/auditor/poc", () => {
     const ctx = setup();
     const finding = await claimedFinding(ctx);
     const response = await ctx.submitPoc(
-      { findingId: finding.id, auditorId: "auditor_1" },
+      { findingId: finding.id, auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2" },
       { name: "Exploit.t.sol", content: Buffer.alloc(POC_SOURCE_MAX_BYTES + 1, 0x61) },
     );
     expect(response.statusCode).toBe(413);
@@ -265,7 +265,7 @@ describe("POST /api/auditor/poc", () => {
   it("returns 404 for an unknown finding", async () => {
     const ctx = setup();
     const response = await ctx.submitPoc(
-      { findingId: "finding_missing", auditorId: "auditor_1" },
+      { findingId: "finding_missing", auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2" },
       { name: "Exploit.t.sol", content: poc },
     );
     expect(response.statusCode).toBe(404);
@@ -276,7 +276,7 @@ describe("POST /api/auditor/poc", () => {
     const { contract } = await ctx.seedContract();
     const finding = ctx.seedFinding(contract.id);
     const response = await ctx.submitPoc(
-      { findingId: finding.id, auditorId: "auditor_1" },
+      { findingId: finding.id, auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2" },
       { name: "Exploit.t.sol", content: poc },
     );
     expect(response.statusCode).toBe(403);
@@ -287,7 +287,7 @@ describe("POST /api/auditor/poc", () => {
     const ctx = setup();
     const finding = await claimedFinding(ctx);
     const response = await ctx.submitPoc(
-      { findingId: finding.id, auditorId: "auditor_2" },
+      { findingId: finding.id, auditorId: "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" },
       { name: "Exploit.t.sol", content: poc },
     );
     expect(response.statusCode).toBe(403);
@@ -298,7 +298,7 @@ describe("POST /api/auditor/poc", () => {
     const finding = await claimedFinding(ctx);
     ctx.advance(CLAIM_WINDOW_SECONDS);
     const response = await ctx.submitPoc(
-      { findingId: finding.id, auditorId: "auditor_1" },
+      { findingId: finding.id, auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2" },
       { name: "Exploit.t.sol", content: poc },
     );
     expect(response.statusCode).toBe(403);
@@ -308,12 +308,12 @@ describe("POST /api/auditor/poc", () => {
     const ctx = setup();
     const finding = await claimedFinding(ctx);
     const first = await ctx.submitPoc(
-      { findingId: finding.id, auditorId: "auditor_1" },
+      { findingId: finding.id, auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2" },
       { name: "Exploit.t.sol", content: poc },
     );
     expect(first.statusCode).toBe(201);
     const second = await ctx.submitPoc(
-      { findingId: finding.id, auditorId: "auditor_1" },
+      { findingId: finding.id, auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2" },
       { name: "Exploit.t.sol", content: poc },
     );
     expect(second.statusCode).toBe(409);
@@ -326,7 +326,7 @@ describe("POST /api/auditor/poc when the claim lapses mid-request", () => {
     const ctx = setup();
     const { contract } = await ctx.seedContract();
     const finding = ctx.seedFinding(contract.id);
-    await ctx.claim(contract.id, "auditor_1");
+    await ctx.claim(contract.id, "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2");
     // The route's pre-check passes; the claim is gone by the time submitPoc
     // re-checks it inside its transaction.
     const pipeline = new MemoryPipelineRepository(ctx.store);
@@ -338,7 +338,7 @@ describe("POST /api/auditor/poc when the claim lapses mid-request", () => {
       config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => T0 },
     });
     const body = multipartBody(
-      { findingId: finding.id, auditorId: "auditor_1" },
+      { findingId: finding.id, auditorId: "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2" },
       { name: "Exploit.t.sol", content: poc },
     );
     const response = await app.inject({ method: "POST", url: "/api/auditor/poc", ...body });

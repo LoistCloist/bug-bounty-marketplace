@@ -10,7 +10,8 @@ import { armChallengeWindow, findContractById, findFindingById } from "./contrac
 
 /** Fixed id of the single seeded auditor profile. Exported so db/contracts.ts
  * can pre-assign claims to this auditor in its own seed data. */
-export const SEED_AUDITOR_ID = "auditor_1";
+/** The seed auditor's id is its wallet address, the same identity the API checks. */
+export const SEED_AUDITOR_ID = MOCK_ADDRESSES.auditor;
 
 /** Finding ids whose PoC is seeded/designed to fail sandbox re-run, landing
  * the finding in Rejected instead of Verified. */
