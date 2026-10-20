@@ -7,17 +7,17 @@ auditor staking and dispute resolution. For installing Foundry, fetching
 
 ## Layout
 
-| Path | Purpose |
-| --- | --- |
-| `src/AuditorStaking.sol` | Auditor stakes (`REQUIRED_STAKE` = 0.1 ETH), reputation, submission locks, slashing. |
-| `src/BountyEscrow.sol` | Holds a developer's ETH bounty per contract. Records submissions and the first verified finding, pays it after the challenge window (pull-based), refunds after the deadline plus refund delay. |
+| Path                        | Purpose                                                                                                                                                                                                         |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/AuditorStaking.sol`    | Auditor stakes (`REQUIRED_STAKE` = 0.1 ETH), reputation, submission locks, slashing.                                                                                                                            |
+| `src/BountyEscrow.sol`      | Holds a developer's ETH bounty per contract. Records submissions and the first verified finding, pays it after the challenge window (pull-based), refunds after the deadline plus refund delay.                 |
 | `src/DisputeResolution.sol` | Developer opens a dispute on a verified finding during the challenge window; the arbiter rules within `RULING_WINDOW` (3 days), or the dispute lapses in the auditor's favour. A losing auditor is slashed 50%. |
-| `src/Placeholder.sol` | Original scaffold contract. |
-| `script/Deploy.s.sol` | Deploys and wires the three contracts. |
-| `test/` | Forge tests, one file per contract plus `Deploy.t.sol`. |
-| `deployments/` | `<chainid>.json` address files written by the deploy script (git-ignored). |
-| `.gas-snapshot` | Committed `forge snapshot` output, checked in CI. |
-| `Dockerfile` | Foundry toolchain image (anvil by default; also runs the deploy). |
+| `src/Placeholder.sol`       | Original scaffold contract.                                                                                                                                                                                     |
+| `script/Deploy.s.sol`       | Deploys and wires the three contracts.                                                                                                                                                                          |
+| `test/`                     | Forge tests, one file per contract plus `Deploy.t.sol`.                                                                                                                                                         |
+| `deployments/`              | `<chainid>.json` address files written by the deploy script (git-ignored).                                                                                                                                      |
+| `.gas-snapshot`             | Committed `forge snapshot` output, checked in CI.                                                                                                                                                               |
+| `Dockerfile`                | Foundry toolchain image (anvil by default; also runs the deploy).                                                                                                                                               |
 
 ## Roles
 
@@ -44,14 +44,14 @@ address as `disputeResolution()` (selector `0xbe9157cf`).
 `script/Deploy.s.sol` (`contract Deploy`) does the steps above. All settings
 come from environment variables, all optional:
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `DEPLOYER_PRIVATE_KEY` | unset | Key to broadcast with. Unset (or 0) uses the CLI sender (`--private-key`, `--sender`). |
-| `OPERATOR` | broadcaster | Backend operator. Must equal the broadcaster, otherwise the script reverts with `Deploy: OPERATOR must equal the broadcaster ...`. |
-| `ARBITER` | broadcaster | Dispute arbiter. |
-| `CHALLENGE_WINDOW` | `259200` (3 days) | Seconds after verification before a finding can be paid. |
-| `REFUND_DELAY` | `10800` (3 hours) | Seconds after the deadline before the developer can refund. |
-| `WRITE_DEPLOYMENTS` | `true` | Write `deployments/<chainid>.json` on a `--broadcast` run. Dry runs and tests never write. |
+| Variable               | Default           | Meaning                                                                                                                            |
+| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `DEPLOYER_PRIVATE_KEY` | unset             | Key to broadcast with. Unset (or 0) uses the CLI sender (`--private-key`, `--sender`).                                             |
+| `OPERATOR`             | broadcaster       | Backend operator. Must equal the broadcaster, otherwise the script reverts with `Deploy: OPERATOR must equal the broadcaster ...`. |
+| `ARBITER`              | broadcaster       | Dispute arbiter.                                                                                                                   |
+| `CHALLENGE_WINDOW`     | `259200` (3 days) | Seconds after verification before a finding can be paid.                                                                           |
+| `REFUND_DELAY`         | `10800` (3 hours) | Seconds after the deadline before the developer can refund.                                                                        |
+| `WRITE_DEPLOYMENTS`    | `true`            | Write `deployments/<chainid>.json` on a `--broadcast` run. Dry runs and tests never write.                                         |
 
 After a broadcast, `deployments/<chainid>.json` looks like:
 
@@ -109,5 +109,30 @@ are owned by that user.
 - Default command: `anvil --host 0.0.0.0 --chain-id 31337`, port 8545, with a
   `cast block-number` healthcheck.
 - One-shot deploy: same image, entrypoint overridden to
-  `forge script script/Deploy.s.sol --rpc-url http://anvil:8545 --broadcast --private-key <key>`,
-  with a volume on `/contracts/deployments` to collect the JSON.
+  `forge script script/Deploy.s.sol --rpc-url http://anvil:8545 --broadcast`,
+  with the key in `DEPLOYER_PRIVATE_KEY` and a volume on
+  `/contracts/deployments` to collect the JSON.
+
+In the compose stack these are the `anvil` and `contracts-deploy` services:
+
+```sh
+pnpm stack:up                  # anvil on :8545
+pnpm stack:deploy-contracts    # docker compose run --rm contracts-deploy (anvil account #0)
+```
+
+The deploy writes to the `deployments` volume; in CI
+(`docker-compose.ci.yml`) it is bind-mounted to `.ci/deployments/`, where the
+chain integration tests read `31337.json`.
+
+## CI and testnet deploy
+
+- `ci.yml` `contracts` job: `forge build`, `forge test -vvv`,
+  `forge snapshot --check`, a `forge script script/Deploy.s.sol` dry run, and
+  Slither (advisory, `fail-on: none`).
+- `contracts-deploy.yml` (manual dispatch) deploys to **Sepolia** in the
+  `contracts-sepolia` GitHub Environment (one reviewer). `broadcast=false`
+  (the default) simulates against live Sepolia state and sends nothing. The
+  RPC URL and deployer key are read over OIDC from the shared Key Vault
+  (`sepolia-rpc-url`, `sepolia-deployer-key`), never from GitHub secrets; see
+  [Azure bootstrap](../devops/azure-bootstrap.md). The run summary lists the
+  addresses, and `broadcast/` + `deployments/` are uploaded as an artifact.

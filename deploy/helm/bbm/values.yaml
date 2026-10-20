@@ -173,8 +173,9 @@ api:
   # -- MIGRATE_ON_BOOT when migrations.enabled is false. Forced to "false"
   # when the migrations Job runs instead.
   migrateOnBoot: true
-  # -- PG_POOL_MAX (pg pool size per pod).
-  pgPoolMax: 10
+  # -- PG_POOL_MAX (pg pool size per pod). PG B1ms allows ~50 connections;
+  # 5/pod leaves room for the migrations Job, worker and admin sessions.
+  pgPoolMax: 5
   # -- MIGRATIONS_DIR override; empty = image default (dist/migrations).
   migrationsDir: ""
   # -- SOURCE_STORAGE_DIR, backed by an emptyDir.

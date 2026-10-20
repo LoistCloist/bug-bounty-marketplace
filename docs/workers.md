@@ -14,14 +14,14 @@ the pnpm workspace — each service manages its own toolchain.
   created (triggered only on changes under that service's directory or
   `packages/shared/schema/**`).
 - Types are generated from the JSON Schema files published at
-  `packages/shared/schema/*.json` (added in `feat/shared-schemas`):
+  `packages/shared/schema/*.json` (see [@bbm/shared](shared.md)):
   - Python: `datamodel-code-generator`
   - Rust: `typify`
 
 ## Services
 
-| Service | Language | Status | Purpose |
-| --- | --- | --- | --- |
+| Service                            | Language                  | Status   | Purpose                                                        |
+| ---------------------------------- | ------------------------- | -------- | -------------------------------------------------------------- |
 | [`analysis`](../workers/analysis/) | Python 3.12 (uv, FastAPI) | skeleton | Slither static analysis + advisory LLM explanation of findings |
 
 ### `workers/analysis`
@@ -29,6 +29,12 @@ the pnpm workspace — each service manages its own toolchain.
 Currently exposes `GET /health` (`{"status":"ok"}`) and a stub
 `POST /analyze` (`{contractId, source}` → `501`). See
 [`workers/analysis/README.md`](../workers/analysis/README.md).
+
+It runs as the `analysis` service in the compose stack (`pnpm stack:up`, port
+`8000`). CI's `analysis` job runs ruff, pytest and the generated-models drift
+check. On Azure it is internal-only: optional on ACA (`analysis_enabled`) and
+off by default in the Helm chart (`analysis.enabled`, scaled by KEDA when on),
+so the system tests run there with `BBM_SKIP_ANALYSIS=1`.
 
 Run locally (uv installs Python 3.12 if needed):
 
