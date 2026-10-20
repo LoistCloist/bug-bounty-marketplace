@@ -88,6 +88,7 @@ jobs:
             # stack. The containers job builds every image and boots the
             # full stack, so it fans out from all component sources.
             containers:
+              - 'tests/**'
               - '**/Dockerfile'
               - '**/.dockerignore'
               - 'docker-compose*.yml'
@@ -388,6 +389,46 @@ jobs:
             localhost:3000/api/contracts | jq -r .id)
           echo "created contract $id"
           curl -fsS "localhost:3000/api/contracts/$id" | jq -e --arg id "$id" '.id == $id'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # System test tiers against the running stack (see tests/README.md).
+      # BBM_* URLs default to the compose ports; deployments JSON comes from
+      # the contracts-deploy step above.
+      - name: Integration tests
+        run: pnpm --filter @bbm/system-tests run test:integration
+
+      - name: Regression tests (API goldens)
+        env:
+          CI: 'true'
+        run: pnpm --filter @bbm/system-tests run test:regression
+
+      - name: Smoke tests
+        run: pnpm --filter @bbm/system-tests run test:smoke
+
+      - name: Install Playwright browser
+        run: pnpm --filter @bbm/system-tests exec playwright install --with-deps chromium
+
+      - name: E2E tests (Playwright)
+        run: pnpm --filter @bbm/system-tests run e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: tests/e2e/playwright-report/
+          if-no-files-found: ignore
 
       - name: Dump logs on failure
         if: failure()
