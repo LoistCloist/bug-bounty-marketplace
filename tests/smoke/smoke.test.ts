@@ -50,7 +50,7 @@ describe("smoke", { timeout: 10_000 }, () => {
     const form = new FormData();
     form.append("file", new Blob([SAMPLE_SOL], { type: "text/plain" }), "Sample.sol");
     form.append("developerAddress", "0x000000000000000000000000000000000000dEaD");
-    form.append("bountyAmount", "0.01");
+    form.append("bountyAmount", "10000000000000000");
     form.append("currency", "ETH");
     form.append("deadline", new Date(Date.now() + 7 * 86_400_000).toISOString());
 

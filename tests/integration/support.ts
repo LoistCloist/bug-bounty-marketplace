@@ -23,7 +23,7 @@ export interface SubmissionFields {
 export function validFields(overrides: Partial<SubmissionFields> = {}): SubmissionFields {
   return {
     developerAddress: uniqueAddress(),
-    bountyAmount: "1.5",
+    bountyAmount: "1500000000000000000",
     currency: "ETH",
     deadline: "2030-01-01T00:00:00.000Z",
     ...overrides,
