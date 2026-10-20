@@ -25,8 +25,10 @@ export interface PayoutDue {
  * make each BountyEscrow write happen at most once. Findings are read and
  * written through the shared status interfaces.
  *
- * Claim lock states: null (never locked), "locked", "unlocking" (an unlock
- * is intended but not yet confirmed; the sweep finishes it), "released".
+ * Claim lock states: null (never locked), "locking" (a lock is intended but
+ * not yet confirmed; the row records the lock count read before the send, so
+ * the sweep can tell whether it landed), "locked", "unlocking" (an unlock is
+ * intended but not yet confirmed; the sweep finishes it), "released".
  */
 export interface ChainActionStore extends FindingStatusReader, FindingStatusWriter {
   findFinding(findingId: string): Promise<FindingChainRef | null>;
@@ -35,8 +37,19 @@ export interface ChainActionStore extends FindingStatusReader, FindingStatusWrit
   markSubmissionRecorded(contractId: string, at: Date): Promise<void>;
   markVerificationRecorded(findingId: string, at: Date): Promise<void>;
 
-  /** Sets the current claim to "locked". False when the contract is no longer
-   * Claimed by this auditor, in which case nothing is recorded. */
+  /** Sets the current claim to "locking" and records `before`, the lock count
+   * read before the send. False, changing nothing, when the claim is not held
+   * by `auditorId` or already has a lock state. */
+  markClaimLocking(contractId: string, auditorId: string, before: bigint): Promise<boolean>;
+  /** Clears a "locking" intent held by `auditorId`: the lock did not land. */
+  clearClaimLocking(contractId: string, auditorId: string): Promise<void>;
+  /** Claims in "locking". `lockBefore` is the count recorded with the intent,
+   * or null when none was recorded. Filtered to one contract when given. */
+  findLockingClaims(
+    contractId?: string,
+  ): Promise<{ contractId: string; auditorId: string; lockBefore: bigint | null }[]>;
+  /** Sets the current claim from "locking" to "locked". False when the claim is
+   * not in "locking" for this auditor. */
   markClaimLocked(contractId: string, auditorId: string): Promise<boolean>;
   /**
    * Atomically flips a "locked" claim to "unlocking" and returns the auditor
@@ -53,7 +66,7 @@ export interface ChainActionStore extends FindingStatusReader, FindingStatusWrit
    * Filtered to one contract when `contractId` is given. */
   findUnlockingClaims(contractId?: string): Promise<{ contractId: string; auditorId: string }[]>;
   /** Sets the claim to "unlocking" if it is still held by `auditorId`. False
-   * when it is not. Used when undoing a lock failed. */
+   * when it is not. Used when a lock or its undo failed after the lock landed. */
   markClaimUnlocking(contractId: string, auditorId: string): Promise<boolean>;
   /** Sets an "unlocking" claim held by `auditorId` to "released". */
   markClaimReleased(contractId: string, auditorId: string): Promise<void>;

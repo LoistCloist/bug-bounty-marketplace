@@ -521,6 +521,138 @@ describe("unlock intent ('unlocking')", () => {
   });
 });
 
+describe("lock intent ('locking')", () => {
+  it("a send that throws without landing clears the intent and releases cleanly", async () => {
+    const { actions, ports, seedContract, repository, chainStore, store } = setup();
+    const contractId = await seedContract();
+    await repository.claimContract(contractId, AUDITOR, new Date(T0.getTime() + CLAIM_WINDOW_MS), T0);
+    ports.auditorStaking.lockSubmission.mockRejectedValueOnce(new Error("timeout waiting for receipt"));
+
+    await expect(actions.lockClaim(contractId, AUDITOR)).rejects.toThrow("timeout waiting for receipt");
+    expect(store.contracts.get(contractId)?.claimLock).toBeNull();
+    await expect(chainStore.findLockingClaims()).resolves.toEqual([]);
+
+    // The route rolls the claim back. Nothing is left for the sweep.
+    await repository.releaseClaim(contractId, AUDITOR);
+    expect(store.contracts.get(contractId)).toMatchObject({ claimedByAuditorId: null, claimLock: null });
+    await expect(repository.findContractById(contractId, T0)).resolves.toMatchObject({ status: "Open" });
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(0);
+    expect(ports.auditorStaking.lockSubmission).toHaveBeenCalledTimes(1);
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+  });
+
+  it("a send that throws after landing ends in 'unlocking' and the sweep unlocks it", async () => {
+    const { actions, ports, seedContract, repository, store } = setup();
+    const contractId = await seedContract();
+    await repository.claimContract(contractId, AUDITOR, new Date(T0.getTime() + CLAIM_WINDOW_MS), T0);
+    const lockLanded = ports.auditorStaking.lockSubmission.getMockImplementation()!;
+    ports.auditorStaking.lockSubmission.mockImplementationOnce(async (auditor: Address) => {
+      await lockLanded(auditor);
+      throw new Error("timeout waiting for receipt");
+    });
+
+    await expect(actions.lockClaim(contractId, AUDITOR)).rejects.toThrow("timeout waiting for receipt");
+    expect(store.contracts.get(contractId)?.claimLock).toBe("unlocking");
+
+    // The route rolls the claim back; the holder and the intent survive.
+    await repository.releaseClaim(contractId, AUDITOR);
+    expect(store.contracts.get(contractId)).toMatchObject({ claimedByAuditorId: AUDITOR, claimLock: "unlocking" });
+
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(1);
+    expect(store.contracts.get(contractId)?.claimLock).toBe("released");
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(0);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("a crash after the send and before markClaimLocked is resolved by the sweep without a second lock", async () => {
+    const { ports, seedContract, repository, chainStore, store, clock } = setup();
+    const contractId = await seedContract();
+    await repository.claimContract(contractId, AUDITOR, new Date(T0.getTime() + CLAIM_WINDOW_MS), T0);
+    // What the first process wrote before it died: the intent, then a send that landed.
+    await chainStore.markClaimLocking(contractId, AUDITOR, 0n);
+    await ports.auditorStaking.lockSubmission(AUDITOR);
+    expect(store.contracts.get(contractId)?.claimLock).toBe("locking");
+
+    // A restarted process has empty in-memory queues over the same store.
+    const restarted = createChainActions({
+      store: chainStore,
+      bountyEscrow: ports.bountyEscrow,
+      auditorStaking: ports.auditorStaking,
+      claimLockEnabled: true,
+      now: () => clock.now,
+      onError: () => {},
+    });
+    await expect(restarted.finishPendingUnlocks()).resolves.toBe(1);
+    expect(ports.auditorStaking.lockSubmission).toHaveBeenCalledTimes(1);
+    expect(ports.auditorStaking.unlockSubmission).toHaveBeenCalledTimes(1);
+    expect(store.contracts.get(contractId)?.claimLock).toBe("released");
+  });
+
+  it("a crash before the send leaves an intent that the sweep clears without sending", async () => {
+    const { ports, seedContract, repository, chainStore, store, clock } = setup();
+    const contractId = await seedContract();
+    await repository.claimContract(contractId, AUDITOR, new Date(T0.getTime() + CLAIM_WINDOW_MS), T0);
+    await chainStore.markClaimLocking(contractId, AUDITOR, 0n);
+
+    const restarted = createChainActions({
+      store: chainStore,
+      bountyEscrow: ports.bountyEscrow,
+      auditorStaking: ports.auditorStaking,
+      claimLockEnabled: true,
+      now: () => clock.now,
+      onError: () => {},
+    });
+    await expect(restarted.finishPendingUnlocks()).resolves.toBe(0);
+    expect(ports.auditorStaking.lockSubmission).not.toHaveBeenCalled();
+    expect(ports.auditorStaking.unlockSubmission).not.toHaveBeenCalled();
+    expect(store.contracts.get(contractId)).toMatchObject({ claimedByAuditorId: AUDITOR, claimLock: null });
+  });
+});
+
+describe("one claim per auditor", () => {
+  it("refuses a second claim while the first is active, and allows one after it expires", async () => {
+    const { seedContract, repository } = setup();
+    const first = await seedContract();
+    const second = await seedContract();
+    const expiresAt = new Date(T0.getTime() + CLAIM_WINDOW_MS);
+    await expect(repository.claimContract(first, AUDITOR, expiresAt, T0)).resolves.toMatchObject({ ok: true });
+
+    await expect(repository.claimContract(second, AUDITOR, expiresAt, T0)).resolves.toEqual({
+      ok: false,
+      reason: "auditor_has_claim",
+    });
+    await expect(
+      repository.claimContract(second, AUDITOR, new Date(expiresAt.getTime() + CLAIM_WINDOW_MS), expiresAt),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("refuses a second claim while the first is locked or unlocking, and allows it once the first is released", async () => {
+    const { actions, ports, seedFinding, seedContract, claim, repository, store } = setup();
+    const first = await seedContract();
+    const second = await seedContract();
+    const findingId = seedFinding(first, "Submitted");
+    const expiresAt = new Date(T0.getTime() + CLAIM_WINDOW_MS);
+    await claim(first);
+    await expect(repository.claimContract(second, AUDITOR, expiresAt, T0)).resolves.toEqual({
+      ok: false,
+      reason: "auditor_has_claim",
+    });
+
+    ports.auditorStaking.unlockSubmission.mockRejectedValueOnce(new Error("rpc unavailable"));
+    await expect(actions.applyVerdict(findingId, "Failed")).rejects.toThrow("rpc unavailable");
+    expect(store.contracts.get(first)?.claimLock).toBe("unlocking");
+    await repository.releaseClaim(first, AUDITOR);
+    await expect(repository.claimContract(second, AUDITOR, expiresAt, T0)).resolves.toEqual({
+      ok: false,
+      reason: "auditor_has_claim",
+    });
+
+    await expect(actions.finishPendingUnlocks()).resolves.toBe(1);
+    await expect(repository.claimContract(second, AUDITOR, expiresAt, T0)).resolves.toMatchObject({ ok: true });
+  });
+});
+
 describe("no chain configured", () => {
   it("makes no chain calls and reports no payouts", async () => {
     const { actions, seedFinding, seedContract, claim, store } = setup({ withChain: false });

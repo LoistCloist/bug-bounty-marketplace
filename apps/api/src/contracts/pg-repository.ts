@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { Contract, ContractStatus } from "@bbm/shared";
 import type {
   ActiveClaim,
@@ -27,6 +27,46 @@ function contractColumns(nowParam: string): string {
           CASE WHEN c.status = 'Claimed' AND c.claim_expires_at <= ${nowParam} THEN 'Open'
                ELSE c.status END AS status,
           c.created_at, c.deadline`;
+}
+
+/** SQL: the auditor (`$2`) holds an active claim, or a claim with a lock
+ * state, on a contract other than `$1`. `nowParam` is the placeholder for now. */
+function holdsAnotherClaim(nowParam: string): string {
+  return `EXISTS (
+    SELECT 1 FROM contracts o
+     WHERE o.claimed_by_auditor_id = $2 AND o.id <> $1
+       AND ((o.status = 'Claimed' AND o.claim_expires_at > ${nowParam})
+            OR o.claim_lock_status IN ('locking', 'locked', 'unlocking')))`;
+}
+
+/** Explains a claim the UPDATE refused: not found, not open (including a
+ * pending lock state on the contract), or the auditor holds another claim. */
+async function refusedClaim(
+  client: PoolClient,
+  contractId: string,
+  auditorId: string,
+  now: Date,
+): Promise<ClaimResult> {
+  const result = await client.query<{
+    status: string;
+    claim_expires_at: Date | null;
+    claim_lock_status: string | null;
+    holds: boolean;
+  }>(
+    `SELECT c.status, c.claim_expires_at, c.claim_lock_status, ${holdsAnotherClaim("$3")} AS holds
+       FROM contracts c WHERE c.id = $1`,
+    [contractId, auditorId, now],
+  );
+  const row = result.rows[0];
+  if (!row) return { ok: false, reason: "not_found" };
+  const open =
+    row.status === "Open" ||
+    (row.status === "Claimed" &&
+      row.claim_expires_at !== null &&
+      row.claim_expires_at.getTime() <= now.getTime());
+  const lockFree = row.claim_lock_status === null || row.claim_lock_status === "released";
+  if (!open || !lockFree) return { ok: false, reason: "not_open" };
+  return { ok: false, reason: row.holds ? "auditor_has_claim" : "not_open" };
 }
 
 function toContract(row: ContractRow): Contract {
@@ -121,32 +161,50 @@ export class PgContractRepository implements ContractRepository {
     expiresAt: Date,
     now: Date,
   ): Promise<ClaimResult> {
-    // One UPDATE decides the race: Postgres re-checks the WHERE clause on the
-    // locked row, so only one of two concurrent claims can match.
-    const result = await this.pool.query<ContractRow>(
-      `UPDATE contracts c
-          SET status = 'Claimed', claimed_by_auditor_id = $2, claim_expires_at = $3,
-              claim_lock_status = NULL
-        WHERE c.id = $1
-          AND (c.status = 'Open' OR (c.status = 'Claimed' AND c.claim_expires_at <= $4))
-        RETURNING ${contractColumns("$4")}`,
-      [contractId, auditorId, expiresAt, now],
-    );
-    const row = result.rows[0];
-    if (row) return { ok: true, contract: toContract(row) };
-    const exists = await this.pool.query("SELECT 1 FROM contracts WHERE id = $1", [contractId]);
-    return { ok: false, reason: exists.rowCount ? "not_open" : "not_found" };
+    // A transaction-scoped advisory lock per auditor serializes claims by one
+    // auditor, so the "holds another claim" check cannot race with a second claim
+    // on a different contract. The UPDATE's WHERE clause still decides the race
+    // for one contract.
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        `claim:${auditorId}`,
+      ]);
+      const result = await client.query<ContractRow>(
+        `UPDATE contracts c
+            SET status = 'Claimed', claimed_by_auditor_id = $2, claim_expires_at = $3,
+                claim_lock_status = NULL, claim_lock_before = NULL
+          WHERE c.id = $1
+            AND (c.status = 'Open' OR (c.status = 'Claimed' AND c.claim_expires_at <= $4))
+            AND (c.claim_lock_status IS NULL OR c.claim_lock_status = 'released')
+            AND NOT ${holdsAnotherClaim("$4")}
+          RETURNING ${contractColumns("$4")}`,
+        [contractId, auditorId, expiresAt, now],
+      );
+      const row = result.rows[0];
+      const outcome: ClaimResult = row
+        ? { ok: true, contract: toContract(row) }
+        : await refusedClaim(client, contractId, auditorId, now);
+      await client.query("COMMIT");
+      return outcome;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async releaseClaim(contractId: string, auditorId: string): Promise<void> {
-    // A pending unlock ('unlocking') keeps the holder and the state: the sweep
-    // needs both to finish it after the claim is rolled back.
+    // A pending lock ('locking') or unlock ('unlocking') keeps the holder and the
+    // state: the sweep needs both to finish it after the claim is rolled back.
     await this.pool.query(
       `UPDATE contracts
           SET status = 'Open', claim_expires_at = NULL,
-              claimed_by_auditor_id = CASE WHEN claim_lock_status = 'unlocking'
+              claimed_by_auditor_id = CASE WHEN claim_lock_status IN ('locking', 'unlocking')
                                            THEN claimed_by_auditor_id END,
-              claim_lock_status = CASE WHEN claim_lock_status = 'unlocking'
+              claim_lock_status = CASE WHEN claim_lock_status IN ('locking', 'unlocking')
                                        THEN claim_lock_status END
         WHERE id = $1 AND status = 'Claimed' AND claimed_by_auditor_id = $2`,
       [contractId, auditorId],

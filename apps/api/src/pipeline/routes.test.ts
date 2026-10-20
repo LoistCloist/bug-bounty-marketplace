@@ -411,6 +411,19 @@ describe("POST /api/auditor/claim with an on-chain lock", () => {
     expect(lock).not.toHaveBeenCalled();
   });
 
+  it("returns 409 when the auditor already holds another claim, and does not lock", async () => {
+    const { seedContract, claim, lock } = chainSetup();
+    const first = await seedContract();
+    const second = await seedContract();
+    expect((await claim(first.id, AUDITOR_A)).statusCode).toBe(200);
+    lock.mockClear();
+
+    const response = await claim(second.id, AUDITOR_A);
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: "auditor already holds an active claim" });
+    expect(lock).not.toHaveBeenCalled();
+  });
+
   it("returns 502, releases the claim and does not apply it when the lock fails", async () => {
     const { seedContract, repository, claim, lock } = chainSetup(async (auditor) => {
       if (auditor === AUDITOR_A) throw new Error("rpc unavailable");

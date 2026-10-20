@@ -42,8 +42,9 @@ export interface ChainActions {
    * has passed. Returns how many claims were released. Throws the first
    * failure after trying the rest. */
   releaseExpiredLocks(now: Date, contractId?: string): Promise<number>;
-  /** The sweep the keeper runs: finishes every claim left in 'unlocking'.
-   * Returns how many claims were released. */
+  /** The sweep the keeper runs: settles every claim left in 'locking' (the lock
+   * landed: unlock it; it did not: clear the intent) and finishes every claim
+   * left in 'unlocking'. Returns how many claims were released. */
   finishPendingUnlocks(): Promise<number>;
   /**
    * Applies a sandbox verdict to a Submitted finding.
@@ -101,20 +102,80 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
     await store.markClaimReleased(contractId, auditorId);
   }
 
-  /** Finishes every claim in 'unlocking' for one contract. The caller holds
-   * that contract's queue. Returns how many were released. */
+  /**
+   * Settles one lock intent ('locking'). The send may or may not have landed,
+   * so the count is read first: it must have risen past the count recorded
+   * before the send. If it did, the claim becomes 'unlocking' and the unlock is
+   * finished. If it did not, or no count was recorded, the intent is cleared.
+   * Nothing is sent unless the lock landed. Returns true when a lock was released.
+   */
+  async function settleLockIntent(claim: {
+    contractId: string;
+    auditorId: string;
+    lockBefore: bigint | null;
+  }): Promise<boolean> {
+    if (!auditorStaking) return false;
+    const landed =
+      claim.lockBefore !== null &&
+      (await auditorStaking.activeSubmissions(claim.auditorId as Address)) > claim.lockBefore;
+    if (!landed) {
+      await store.clearClaimLocking(claim.contractId, claim.auditorId);
+      return false;
+    }
+    if (!(await store.markClaimUnlocking(claim.contractId, claim.auditorId))) {
+      throw new Error(`claim ${claim.contractId} is no longer held by ${claim.auditorId}`);
+    }
+    await finishUnlock(claim.contractId, claim.auditorId);
+    return true;
+  }
+
+  /** Finishes every claim in 'locking' and 'unlocking' for one contract. The
+   * caller holds that contract's queue. Returns how many locks were released. */
   async function finishUnlockingFor(contractId: string): Promise<number> {
+    let released = 0;
+    for (const claim of await store.findLockingClaims(contractId)) {
+      if (await settleLockIntent(claim)) released += 1;
+    }
     const pending = await store.findUnlockingClaims(contractId);
     for (const claim of pending) {
       await finishUnlock(claim.contractId, claim.auditorId);
     }
-    return pending.length;
+    return released + pending.length;
+  }
+
+  /**
+   * A lock send threw. Reads whether the lock landed (the count rose past
+   * `before`): if so the claim becomes 'unlocking' and the sweep unlocks it;
+   * if not the intent is cleared. A read or write that fails leaves the
+   * 'locking' intent for the sweep, which decides from the chain. Never throws.
+   */
+  async function settleFailedLock(contractId: string, auditorId: string, before: bigint): Promise<void> {
+    if (!auditorStaking) return;
+    let landed: boolean;
+    try {
+      landed = (await auditorStaking.activeSubmissions(auditorId as Address)) > before;
+    } catch (err) {
+      onError(`activeSubmissions read failed after a lock send on ${contractId}; the sweep will decide`, err);
+      return;
+    }
+    try {
+      if (!landed) {
+        await store.clearClaimLocking(contractId, auditorId);
+      } else if (!(await store.markClaimUnlocking(contractId, auditorId))) {
+        onError(`claim ${contractId} is no longer held by ${auditorId}; its lock needs manual release`, undefined);
+      }
+    } catch (err) {
+      onError(`recording the lock outcome for ${contractId} failed; the sweep will decide`, err);
+    }
   }
 
   /** Finishes every 'unlocking' claim, or those of one contract. Each contract
    * is tried even when an earlier one fails; the first failure is rethrown. */
   async function finishUnlocking(contractId?: string): Promise<number> {
-    const pending = await store.findUnlockingClaims(contractId);
+    const pending = [
+      ...(await store.findLockingClaims(contractId)),
+      ...(await store.findUnlockingClaims(contractId)),
+    ];
     let released = 0;
     let firstError: { err: unknown } | undefined;
     for (const id of new Set(pending.map((claim) => claim.contractId))) {
@@ -212,17 +273,28 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
 
     async lockClaim(contractId, auditorId) {
       if (!lockEnabled || !auditorStaking) return;
-      const staker = auditorId as Address;
-      // Read before locking, so a failed undo can tell whether the lock landed.
-      const before = await auditorStaking.activeSubmissions(staker);
-      await auditorStaking.lockSubmission(staker);
-      let recorded = false;
-      try {
-        recorded = await store.markClaimLocked(contractId, auditorId);
-      } catch (err) {
-        onError(`markClaimLocked failed for contract ${contractId}`, err);
-      }
-      if (!recorded) {
+      await serialize(contractId, async () => {
+        const staker = auditorId as Address;
+        // Read before the send, so an intent records the count to compare with.
+        const before = await auditorStaking.activeSubmissions(staker);
+        // The intent is written before the send. A crash after the send leaves
+        // it for the sweep, which compares the count with `before`.
+        if (!(await store.markClaimLocking(contractId, auditorId, before))) {
+          throw new Error(`Claim on ${contractId} is not held by ${auditorId}`);
+        }
+        try {
+          await auditorStaking.lockSubmission(staker);
+        } catch (err) {
+          await settleFailedLock(contractId, auditorId, before);
+          throw err;
+        }
+        let recorded = false;
+        try {
+          recorded = await store.markClaimLocked(contractId, auditorId);
+        } catch (err) {
+          onError(`markClaimLocked failed for contract ${contractId}`, err);
+        }
+        if (recorded) return;
         // The stake is locked on-chain but the claim cannot record it, so no
         // unlock would ever run. Undo the lock now and let the caller fail.
         try {
@@ -230,9 +302,11 @@ export function createChainActions(deps: ChainActionsDeps): ChainActions {
         } catch (err) {
           onError(`unlockSubmission failed while undoing a lock on ${contractId}`, err);
           await recordUndoFailure(contractId, auditorId, before);
+          throw new Error(`Claim on ${contractId} could not record its lock`, { cause: err });
         }
+        await store.clearClaimLocking(contractId, auditorId);
         throw new Error(`Claim on ${contractId} could not record its lock`);
-      }
+      });
     },
 
     async releaseExpiredLocks(at, contractId) {

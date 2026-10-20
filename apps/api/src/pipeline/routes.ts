@@ -128,6 +128,9 @@ export function registerPipelineRoutes(app: FastifyInstance, deps: PipelineRoute
       const result = await contracts.claimContract(contractId, auditorId, expiresAt, now);
       if (!result.ok) {
         if (result.reason === "not_found") return reply.code(404).send({ error: "Not found" });
+        if (result.reason === "auditor_has_claim") {
+          return reply.code(409).send({ error: "auditor already holds an active claim" });
+        }
         return reply.code(409).send({ error: `Contract ${contractId} is not open to claim` });
       }
       if (!chainActions) return result.contract;

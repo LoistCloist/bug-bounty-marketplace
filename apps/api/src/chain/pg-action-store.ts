@@ -73,10 +73,55 @@ export class PgChainActionStore implements ChainActionStore {
     );
   }
 
+  async markClaimLocking(contractId: string, auditorId: string, before: bigint): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE contracts SET claim_lock_status = 'locking', claim_lock_before = $3
+        WHERE id = $1 AND status = 'Claimed' AND claimed_by_auditor_id = $2
+          AND claim_lock_status IS NULL`,
+      [contractId, auditorId, before.toString()],
+    );
+    return result.rowCount === 1;
+  }
+
+  async clearClaimLocking(contractId: string, auditorId: string): Promise<void> {
+    // An Open contract keeps no holder once its intent is cleared.
+    await this.pool.query(
+      `UPDATE contracts
+          SET claim_lock_status = NULL, claim_lock_before = NULL,
+              claimed_by_auditor_id = CASE WHEN status = 'Claimed'
+                                           THEN claimed_by_auditor_id END
+        WHERE id = $1 AND claim_lock_status = 'locking' AND claimed_by_auditor_id = $2`,
+      [contractId, auditorId],
+    );
+  }
+
+  async findLockingClaims(
+    contractId?: string,
+  ): Promise<{ contractId: string; auditorId: string; lockBefore: bigint | null }[]> {
+    const result = await this.pool.query<{
+      id: string;
+      claimed_by_auditor_id: string;
+      claim_lock_before: string | null;
+    }>(
+      `SELECT id, claimed_by_auditor_id, claim_lock_before FROM contracts
+        WHERE claim_lock_status = 'locking'
+          AND claimed_by_auditor_id IS NOT NULL
+          AND ($1::text IS NULL OR id = $1)
+        ORDER BY id`,
+      [contractId ?? null],
+    );
+    return result.rows.map((row) => ({
+      contractId: row.id,
+      auditorId: row.claimed_by_auditor_id,
+      lockBefore: row.claim_lock_before === null ? null : BigInt(row.claim_lock_before),
+    }));
+  }
+
   async markClaimLocked(contractId: string, auditorId: string): Promise<boolean> {
     const result = await this.pool.query(
-      `UPDATE contracts SET claim_lock_status = 'locked'
-        WHERE id = $1 AND status = 'Claimed' AND claimed_by_auditor_id = $2`,
+      `UPDATE contracts SET claim_lock_status = 'locked', claim_lock_before = NULL
+        WHERE id = $1 AND status = 'Claimed' AND claimed_by_auditor_id = $2
+          AND claim_lock_status = 'locking'`,
       [contractId, auditorId],
     );
     return result.rowCount === 1;
@@ -114,7 +159,7 @@ export class PgChainActionStore implements ChainActionStore {
 
   async markClaimUnlocking(contractId: string, auditorId: string): Promise<boolean> {
     const result = await this.pool.query(
-      `UPDATE contracts SET claim_lock_status = 'unlocking'
+      `UPDATE contracts SET claim_lock_status = 'unlocking', claim_lock_before = NULL
         WHERE id = $1 AND claimed_by_auditor_id = $2`,
       [contractId, auditorId],
     );

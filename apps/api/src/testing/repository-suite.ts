@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { FindingSchema, type Bounty, type Contract, type PoCSubmission } from "@bbm/shared";
 import type { ContractRepository } from "../contracts/repository.js";
 import type {
@@ -17,6 +17,9 @@ export interface RepositoryHarness {
   seedFinding(record: FindingRecord): Promise<void>;
   setJobStatus(jobId: string, status: JobStatus, lastError?: string): Promise<void>;
   jobsFor(subjectId: string): Promise<Array<{ kind: string; status: JobStatus }>>;
+  /** Removes what the tests have inserted so far, so the next test starts with
+   * no claims. The auditors in these tests hold one claim at a time. */
+  reset(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -109,6 +112,10 @@ export function describeRepositories(
   describe.skipIf(options.skip ?? false)(`${name} repositories`, () => {
     const h = options.skip ? (undefined as unknown as RepositoryHarness) : makeHarness();
 
+    afterEach(async () => {
+      await h?.reset();
+    });
+
     afterAll(async () => {
       await h?.close();
     });
@@ -199,7 +206,33 @@ export function describeRepositories(
       });
     });
 
+    it("an auditor holds one claim at a time, across contracts", async () => {
+      const first = await insert();
+      const second = await insert();
+      expect((await h.contracts.claimContract(first.contract.id, "auditor_1", minutes(10), T0)).ok).toBe(true);
+      expect(await h.contracts.claimContract(second.contract.id, "auditor_1", minutes(10), T0)).toEqual({
+        ok: false,
+        reason: "auditor_has_claim",
+      });
+      expect((await h.contracts.claimContract(second.contract.id, "auditor_2", minutes(10), T0)).ok).toBe(true);
+      // Once the first claim has expired, the auditor may claim again.
+      const third = await insert();
+      expect((await h.contracts.claimContract(third.contract.id, "auditor_1", minutes(20), minutes(10))).ok).toBe(
+        true,
+      );
+    });
+
     if (options.concurrent) {
+      it("of two simultaneous claims by one auditor on different contracts, exactly one succeeds", async () => {
+        const a = await insert();
+        const b = await insert();
+        const results = await Promise.all([
+          h.contracts.claimContract(a.contract.id, "auditor_1", minutes(10), T0),
+          h.contracts.claimContract(b.contract.id, "auditor_1", minutes(10), T0),
+        ]);
+        expect(results.filter((r) => r.ok)).toHaveLength(1);
+      });
+
       it("of two simultaneous claims exactly one succeeds", async () => {
         const { contract } = await insert();
         const results = await Promise.all([

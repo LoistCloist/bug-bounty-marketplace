@@ -49,12 +49,49 @@ export class MemoryChainActionStore implements ChainActionStore {
     this.verificationRecorded.add(findingId);
   }
 
-  async markClaimLocked(contractId: string, auditorId: string): Promise<boolean> {
+  async markClaimLocking(contractId: string, auditorId: string, before: bigint): Promise<boolean> {
     const stored = this.store.contracts.get(contractId);
     if (!stored || stored.contract.status !== "Claimed" || stored.claimedByAuditorId !== auditorId) {
       return false;
     }
+    if (stored.claimLock !== null) return false;
+    stored.claimLock = "locking";
+    stored.claimLockBefore = before;
+    return true;
+  }
+
+  async clearClaimLocking(contractId: string, auditorId: string): Promise<void> {
+    const stored = this.store.contracts.get(contractId);
+    if (stored?.claimLock !== "locking" || stored.claimedByAuditorId !== auditorId) return;
+    stored.claimLock = null;
+    stored.claimLockBefore = null;
+    if (stored.contract.status !== "Claimed") stored.claimedByAuditorId = null;
+  }
+
+  async findLockingClaims(
+    contractId?: string,
+  ): Promise<{ contractId: string; auditorId: string; lockBefore: bigint | null }[]> {
+    const out: { contractId: string; auditorId: string; lockBefore: bigint | null }[] = [];
+    for (const [id, stored] of this.store.contracts) {
+      if (contractId !== undefined && id !== contractId) continue;
+      if (stored.claimLock !== "locking" || !stored.claimedByAuditorId) continue;
+      out.push({ contractId: id, auditorId: stored.claimedByAuditorId, lockBefore: stored.claimLockBefore });
+    }
+    return out;
+  }
+
+  async markClaimLocked(contractId: string, auditorId: string): Promise<boolean> {
+    const stored = this.store.contracts.get(contractId);
+    if (
+      !stored ||
+      stored.contract.status !== "Claimed" ||
+      stored.claimedByAuditorId !== auditorId ||
+      stored.claimLock !== "locking"
+    ) {
+      return false;
+    }
     stored.claimLock = "locked";
+    stored.claimLockBefore = null;
     return true;
   }
 
@@ -88,6 +125,7 @@ export class MemoryChainActionStore implements ChainActionStore {
     const stored = this.store.contracts.get(contractId);
     if (!stored || stored.claimedByAuditorId !== auditorId) return false;
     stored.claimLock = "unlocking";
+    stored.claimLockBefore = null;
     return true;
   }
 
