@@ -342,8 +342,10 @@ export function describeRepositories(
       const funded = await insert();
       const unfunded = await insert();
       expect((await h.contracts.findBounty(funded.contract.id))?.amount).toBe(funded.bounty.amount);
+      expect(await h.contracts.isFunded(funded.contract.id)).toBe(false);
       await h.contracts.markFunded(funded.contract.id, T0);
       await h.contracts.markFunded(funded.contract.id, minutes(1));
+      expect(await h.contracts.isFunded(funded.contract.id)).toBe(true);
       const queued = (await h.contracts.listQueue(T0, { fundedOnly: true })).map((c) => c.id);
       expect(queued).toContain(funded.contract.id);
       expect(queued).not.toContain(unfunded.contract.id);

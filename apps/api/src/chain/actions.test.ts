@@ -78,9 +78,9 @@ function statefulBounty(ports: ReturnType<typeof fakePorts>) {
   });
   ports.bountyEscrow.readBounty.mockImplementation(async () => ({
     developer: AUDITOR,
-        amount: 0n,
-        deadline: 0n,
-        state: paid ? 2 : 1,
+    amount: 0n,
+    deadline: 0n,
+    state: paid ? 2 : 1,
     submissionCount: submissions,
     verifiedFinding: verified,
     verifiedAuditor: AUDITOR,

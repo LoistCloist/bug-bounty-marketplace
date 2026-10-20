@@ -113,9 +113,9 @@ describe("runVerdictsOnce", () => {
       readBounty: vi.fn(
         async (): Promise<OnchainBounty> => ({
           developer: AUDITOR,
-        amount: 0n,
-        deadline: 0n,
-        state: 1,
+          amount: 0n,
+          deadline: 0n,
+          state: 1,
           submissionCount: submissions,
           verifiedFinding: verified,
           verifiedAuditor: AUDITOR,
@@ -167,9 +167,9 @@ describe("runVerdictsOnce", () => {
       readBounty: vi.fn(
         async (): Promise<OnchainBounty> => ({
           developer: AUDITOR,
-        amount: 0n,
-        deadline: 0n,
-        state: 1,
+          amount: 0n,
+          deadline: 0n,
+          state: 1,
           submissionCount: submissions,
           verifiedFinding: verified,
           verifiedAuditor: AUDITOR,
@@ -225,9 +225,9 @@ describe("runVerdictsOnce racing the indexer", () => {
       readBounty: vi.fn(
         async (): Promise<OnchainBounty> => ({
           developer: AUDITOR,
-        amount: 0n,
-        deadline: 0n,
-        state: 1,
+          amount: 0n,
+          deadline: 0n,
+          state: 1,
           submissionCount: submissions,
           verifiedFinding: verified,
           verifiedAuditor: AUDITOR,

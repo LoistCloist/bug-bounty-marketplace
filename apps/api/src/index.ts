@@ -48,8 +48,8 @@ if (chainConfig && !pool) {
 // With a chain, user routes act for the signed-in wallet, so sign-in needs a
 // session secret.
 const sessionSecret = process.env.SESSION_SECRET || undefined;
-if (chainConfig && !sessionSecret) {
-  throw new Error("CHAIN_RPC_URL is set but SESSION_SECRET is missing (needed for wallet sign-in)");
+if (chainConfig && (!sessionSecret || sessionSecret.length < 16)) {
+  throw new Error("CHAIN_RPC_URL is set but SESSION_SECRET is missing or shorter than 16 characters (needed for wallet sign-in)");
 }
 const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
 const lockEnabled = claimLockEnabled(process.env);

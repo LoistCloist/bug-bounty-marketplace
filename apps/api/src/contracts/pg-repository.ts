@@ -272,6 +272,14 @@ export class PgContractRepository implements ContractRepository {
     return result.rows.map((row) => row.id);
   }
 
+  async isFunded(contractId: string): Promise<boolean> {
+    const result = await this.pool.query<{ funded: boolean }>(
+      "SELECT onchain_funded_at IS NOT NULL AS funded FROM bounties WHERE contract_id = $1",
+      [contractId],
+    );
+    return result.rows[0]?.funded ?? false;
+  }
+
   async markFunded(contractId: string, at: Date): Promise<void> {
     await this.pool.query(
       "UPDATE bounties SET onchain_funded_at = COALESCE(onchain_funded_at, $2) WHERE contract_id = $1",
@@ -286,15 +294,20 @@ export class PgContractRepository implements ContractRepository {
     if (!canTransitionContract(current.status, next)) {
       throw new InvalidTransitionError("contract", current.status, next);
     }
-    // Guard on the stored row so a concurrent claim or resolution is not
-    // overwritten; leaving Claimed clears the claim columns.
+    // Guard on the status read so a concurrent claim or resolution is not
+    // overwritten. Leaving Claimed clears the claim columns, except while a
+    // claim lock is held: the unlock sweep needs the holder and expiry.
     const result = await this.pool.query(
       `UPDATE contracts
           SET status = $2,
-              claimed_by_auditor_id = CASE WHEN $2 = 'Claimed' THEN claimed_by_auditor_id END,
-              claim_expires_at = CASE WHEN $2 = 'Claimed' THEN claim_expires_at END
-        WHERE id = $1 AND status IN ('Open', 'Claimed') AND status <> 'Resolved'`,
-      [contractId, next],
+              claimed_by_auditor_id = CASE WHEN $2 = 'Claimed'
+                                             OR claim_lock_status IN ('locking', 'locked', 'unlocking')
+                                           THEN claimed_by_auditor_id END,
+              claim_expires_at = CASE WHEN $2 = 'Claimed'
+                                        OR claim_lock_status IN ('locking', 'locked', 'unlocking')
+                                      THEN claim_expires_at END
+        WHERE id = $1 AND status = ANY($3::text[])`,
+      [contractId, next, current.status === "Open" ? ["Open", "Claimed"] : [current.status]],
     );
     if (result.rowCount !== 1) throw new InvalidTransitionError("contract", current.status, next);
     return this.findContractById(contractId, now);

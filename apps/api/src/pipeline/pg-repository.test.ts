@@ -43,6 +43,7 @@ describeRepositories(
       findBounty: (id) => repo.findBounty(id),
       listClaimedContractIds: (id, now) => repo.listClaimedContractIds(id, now),
       markFunded: (id, at) => repo.markFunded(id, at),
+      isFunded: (id) => repo.isFunded(id),
       setContractStatus: (id, next, now) => repo.setContractStatus(id, next, now),
     };
     // Deletes every row the tests inserted so far, so a shared dev database

@@ -96,6 +96,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       bountyEscrow: options.bountyEscrow,
       auth: identity,
       now: options.now ?? config.now,
+      chainActions: options.chainActions,
     });
     if (options.disputeResolution && options.auditorStaking && options.chainConfig) {
       registerFindingLifecycleRoutes(app, {

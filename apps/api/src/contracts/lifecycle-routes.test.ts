@@ -11,7 +11,7 @@ const NOBODY = "0x0000000000000000000000000000000000000000" as Address;
 const DEADLINE = "2030-01-01T00:00:00.000Z";
 const AMOUNT = "1000000000000000000";
 
-function setup() {
+function setup(options: { chainActions?: unknown } = {}) {
   const bounties = new Map<Hex, OnchainBounty>();
   const bountyEscrow = {
     readBounty: vi.fn(
@@ -28,7 +28,7 @@ function setup() {
         },
     ),
   } satisfies Pick<BountyEscrowPort, "readBounty">;
-  const app = buildApp({ sessionSecret: "s", bountyEscrow });
+  const app = buildApp({ sessionSecret: "s", bountyEscrow, chainActions: options.chainActions as never });
   function fundOnChain(contractId: string, state = 1, developer: Address = DEVELOPER.address) {
     bounties.set(onchainId(contractId), {
       developer,
@@ -145,5 +145,70 @@ describe("contract lifecycle routes with a chain", () => {
       payload: { contractId: id },
     });
     expect(ok.statusCode).toBe(200);
+  });
+});
+
+describe("review fixes", () => {
+  it("refuses to claim a bounty that is not funded on-chain", async () => {
+    const { app, upload } = setup();
+    const id = (await upload(await signIn(app, DEVELOPER))).json().id as string;
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auditor/claim",
+      headers: { cookie: await signIn(app, AUDITOR) },
+      payload: { contractId: id },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it("cancel releases the auditor's claim lock before expiring the contract", async () => {
+    const chainActions = {
+      chainConfigured: true,
+      releaseExpiredLocks: vi.fn(async () => 1),
+      lockClaim: vi.fn(async () => undefined),
+    };
+    const { app, upload, fundOnChain } = setup({ chainActions });
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 3);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(200);
+    expect(chainActions.releaseExpiredLocks).toHaveBeenCalledWith(expect.any(Date), id);
+    const [at] = chainActions.releaseExpiredLocks.mock.calls[0] as unknown as [Date];
+    expect(at.getTime()).toBeGreaterThan(Date.now() + 365 * 86_400_000);
+  });
+
+  it("keeps the contract when the claim lock cannot be released", async () => {
+    const chainActions = {
+      chainConfigured: true,
+      releaseExpiredLocks: vi.fn(async () => {
+        throw new Error("rpc down");
+      }),
+    };
+    const { app, upload, fundOnChain } = setup({ chainActions });
+    const dev = await signIn(app, DEVELOPER);
+    const id = (await upload(dev)).json().id as string;
+    fundOnChain(id, 3);
+    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/reclaim`, headers: { cookie: dev } });
+    expect(res.statusCode).toBe(502);
+    const contract = await app.inject({ method: "GET", url: `/api/contracts/${id}` });
+    expect(contract.json().status).toBe("Open");
+  });
+
+  it("PoC uploads need a session and cannot name another auditor", async () => {
+    const { app } = setup();
+    const form = multipartBody(
+      { findingId: "finding_x", auditorId: DEVELOPER.address },
+      { name: "PoC.t.sol", content: Buffer.from("contract T {}") },
+    );
+    const none = await app.inject({ method: "POST", url: "/api/auditor/poc", headers: form.headers, payload: form.payload });
+    expect(none.statusCode).toBe(401);
+    const other = await app.inject({
+      method: "POST",
+      url: "/api/auditor/poc",
+      headers: { ...form.headers, cookie: await signIn(app, AUDITOR) },
+      payload: form.payload,
+    });
+    expect(other.statusCode).toBe(403);
   });
 });

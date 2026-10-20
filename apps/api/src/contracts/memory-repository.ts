@@ -137,6 +137,10 @@ export class MemoryContractRepository implements ContractRepository {
       .map((stored) => stored.contract.id);
   }
 
+  async isFunded(contractId: string): Promise<boolean> {
+    return this.store.onchainFunded.has(contractId);
+  }
+
   async markFunded(contractId: string, at: Date): Promise<void> {
     if (!this.store.onchainFunded.has(contractId)) this.store.onchainFunded.set(contractId, at.toISOString());
   }
@@ -148,7 +152,9 @@ export class MemoryContractRepository implements ContractRepository {
     if (current === next) return this.store.view(stored, now);
     if (!canTransitionContract(current, next)) throw new InvalidTransitionError("contract", current, next);
     stored.contract = { ...stored.contract, status: next };
-    if (next !== "Claimed") {
+    // A held lock keeps its holder and expiry, so the unlock sweep can still
+    // release the auditor's stake.
+    if (next !== "Claimed" && !HELD_LOCK_STATES.has(stored.claimLock ?? "")) {
       stored.claimedByAuditorId = null;
       stored.claimExpiresAt = null;
     }

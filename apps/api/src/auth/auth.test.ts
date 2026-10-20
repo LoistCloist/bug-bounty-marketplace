@@ -74,6 +74,15 @@ describe("signed-message sign-in", () => {
     expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie } })).statusCode).toBe(401);
   });
 
+  it("keeps only the newest open sign-in requests per address", async () => {
+    const { nonce, login } = setup();
+    const first = await nonce(AUDITOR.address);
+    for (let i = 0; i < 5; i += 1) await nonce(AUDITOR.address);
+    expect((await login(AUDITOR.address, await AUDITOR.signMessage({ message: first.message }))).statusCode).toBe(401);
+    const latest = await nonce(AUDITOR.address);
+    expect((await login(AUDITOR.address, await AUDITOR.signMessage({ message: latest.message }))).statusCode).toBe(200);
+  });
+
   it("logs out by clearing the cookie", async () => {
     const { app } = setup();
     const res = await app.inject({ method: "POST", url: "/api/auth/logout" });

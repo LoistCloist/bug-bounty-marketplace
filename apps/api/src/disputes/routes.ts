@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { DisputeRulingSchema, type AuditorProfile, type Dispute } from "@bbm/shared";
-import { getAddress, type Address } from "viem";
+import { getAddress, isAddress, type Address } from "viem";
 import type { Auth } from "../auth/session.js";
 import type { ChainActions } from "../chain/actions.js";
 import type { AuditorStakingPort } from "../chain/auditor-staking.js";
@@ -87,7 +87,7 @@ export function registerFindingLifecycleRoutes(app: FastifyInstance, deps: Findi
       }
       const finding = await pipeline.findFinding(request.params.id, now());
       if (!finding) return reply.code(404).send({ error: "Finding not found" });
-      if (getAddress(finding.contract.developerAddress) !== address) {
+      if (!isAddress(finding.contract.developerAddress) || getAddress(finding.contract.developerAddress) !== address) {
         return reply.code(403).send({ error: "only the contract's developer can dispute" });
       }
       const onchain = await disputeResolution.getDispute(onchainId(finding.contractId), onchainId(finding.id));

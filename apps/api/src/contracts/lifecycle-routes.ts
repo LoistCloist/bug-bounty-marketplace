@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Contract } from "@bbm/shared";
-import { getAddress } from "viem";
+import { getAddress, isAddress } from "viem";
 import type { Auth } from "../auth/session.js";
+import type { ChainActions } from "../chain/actions.js";
 import { BOUNTY_STATE_CLOSED, BOUNTY_STATE_OPEN, type BountyEscrowPort } from "../chain/bounty-escrow.js";
 import { onchainId } from "../chain/ids.js";
 import { InvalidTransitionError } from "../status/transitions.js";
@@ -12,7 +13,12 @@ export interface ContractLifecycleDeps {
   bountyEscrow: Pick<BountyEscrowPort, "readBounty">;
   auth: Auth;
   now: () => Date;
+  /** Releases an auditor's claim lock on a closed bounty. */
+  chainActions?: Pick<ChainActions, "releaseExpiredLocks">;
 }
+
+/** Later than any claim expiry: lets the expiry sweep release a lock now. */
+const END_OF_TIME = new Date(8.64e15);
 
 /**
  * Developer actions whose transaction the developer signs in their own wallet
@@ -34,7 +40,7 @@ export function registerContractLifecycleRoutes(app: FastifyInstance, deps: Cont
       void reply.code(404).send({ error: "Contract not found" });
       return undefined;
     }
-    if (getAddress(contract.developerAddress) !== address) {
+    if (!isAddress(contract.developerAddress) || getAddress(contract.developerAddress) !== address) {
       void reply.code(403).send({ error: "only the contract's developer can do this" });
       return undefined;
     }
@@ -66,6 +72,16 @@ export function registerContractLifecycleRoutes(app: FastifyInstance, deps: Cont
         return reply.code(409).send({
           error: action === "cancel" ? "bounty not deleted on-chain" : "bounty not refunded on-chain",
         });
+      }
+      // The bounty is closed, so an auditor's claim on it is moot: release the
+      // stake lock first, or it would stay locked once the claim is cleared.
+      if (deps.chainActions) {
+        try {
+          await deps.chainActions.releaseExpiredLocks(END_OF_TIME, contract.id);
+        } catch (err) {
+          request.log.error({ err, contractId: contract.id }, "releasing the claim lock failed");
+          return reply.code(502).send({ error: "could not release the auditor's claim lock; try again" });
+        }
       }
       try {
         return await contracts.setContractStatus(contract.id, "Expired", now());

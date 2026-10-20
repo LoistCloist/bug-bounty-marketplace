@@ -5,6 +5,8 @@ import { getAddress, isAddress, verifyMessage, type Address, type Hex } from "vi
 export const SESSION_COOKIE = "bbm_session";
 const NONCE_TTL_MS = 5 * 60_000;
 const SESSION_TTL_MS = 8 * 3_600_000;
+/** Open sign-in requests kept per address; older ones are dropped. */
+const MAX_NONCES_PER_ADDRESS = 5;
 
 /** The exact message a wallet signs to sign in. */
 export function signInMessage(address: string, nonce: string): string {
@@ -27,13 +29,18 @@ export class Auth {
   issueNonce(address: string): { nonce: string; message: string } {
     const checksummed = getAddress(address);
     this.pruneNonces();
+    const open = [...this.nonces].filter(([, entry]) => entry.address === checksummed);
+    for (const [stale] of open.slice(0, Math.max(0, open.length - MAX_NONCES_PER_ADDRESS + 1))) {
+      this.nonces.delete(stale);
+    }
     const nonce = randomBytes(16).toString("hex");
     this.nonces.set(nonce, { address: checksummed, expiresAt: this.now().getTime() + NONCE_TTL_MS });
     return { nonce, message: signInMessage(checksummed, nonce) };
   }
 
   /** Verifies a signature over an issued nonce's message. Returns the session
-   * cookie value on success, null otherwise. The nonce is spent either way. */
+   * cookie value on success, null otherwise. A nonce is spent when a
+   * signature over it verifies. */
   async login(address: string, signature: Hex): Promise<{ address: Address; token: string } | null> {
     if (!isAddress(address)) return null;
     const checksummed = getAddress(address);
@@ -59,7 +66,7 @@ export class Auth {
     const [payload, mac] = token.split(".");
     if (!payload || !mac || !safeEqual(mac, this.mac(payload))) return null;
     const [address, expires] = Buffer.from(payload, "base64url").toString("utf8").split("|");
-    if (!address || !isAddress(address) || Number(expires) <= this.now().getTime()) return null;
+    if (!address || !isAddress(address) || !(Number(expires) > this.now().getTime())) return null;
     return getAddress(address);
   }
 
