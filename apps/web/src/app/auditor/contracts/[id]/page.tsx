@@ -12,14 +12,12 @@ import { FindingCard } from "../../_components/FindingCard";
 /** True while a finding is still awaiting an auditor action or sandbox
  * result - used to decide whether to keep polling. */
 function isInFlight(status: string): boolean {
-  return status === "Flagged" || status === "Submitted";
+  return (
+    status === "Flagged" || status === "Submitted" || status === "Verified" || status === "Disputed"
+  );
 }
 
-export default function ClaimedContractPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default function ClaimedContractPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: contractId } = use(params);
   const queryClient = useQueryClient();
   const auditorId = SEED_AUDITOR_ID;
@@ -27,6 +25,7 @@ export default function ClaimedContractPage({
   const contractQuery = useQuery({
     queryKey: ["contract", contractId],
     queryFn: () => developerApi.getContract(contractId),
+    refetchInterval: 2_000,
   });
 
   const findingsQuery = useQuery({
@@ -43,8 +42,10 @@ export default function ClaimedContractPage({
     queryFn: () => auditorApi.getProfile(auditorId),
   });
 
-  const refetchFindings = () => void queryClient.invalidateQueries({ queryKey: ["contract-findings", contractId] });
-  const refetchProfile = () => void queryClient.invalidateQueries({ queryKey: ["auditor-profile", auditorId] });
+  const refetchFindings = () =>
+    void queryClient.invalidateQueries({ queryKey: ["contract-findings", contractId] });
+  const refetchProfile = () =>
+    void queryClient.invalidateQueries({ queryKey: ["auditor-profile", auditorId] });
 
   if (contractQuery.isLoading || findingsQuery.isLoading || profileQuery.isLoading) {
     return <p className="text-slate-400">Loading contract...</p>;
@@ -54,6 +55,16 @@ export default function ClaimedContractPage({
   }
   if (profileQuery.isError || !profileQuery.data) {
     return <p className="text-red-400">Failed to load auditor profile.</p>;
+  }
+  if (findingsQuery.isError) {
+    return (
+      <div role="alert">
+        <p className="text-red-400">Failed to load findings.</p>
+        <button className="button-secondary mt-4" onClick={() => void findingsQuery.refetch()}>
+          Try again
+        </button>
+      </div>
+    );
   }
 
   const contract = contractQuery.data;
