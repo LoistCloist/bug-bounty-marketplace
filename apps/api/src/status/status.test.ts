@@ -102,6 +102,42 @@ describe("contract transitions", () => {
     expect(CONTRACT_TRANSITIONS.Resolved).toEqual([]);
     expect(CONTRACT_TRANSITIONS.Expired).toEqual([]);
   });
+
+  describe("exhaustive pairs", () => {
+    // Rules encoded explicitly here (not read from CONTRACT_TRANSITIONS), so a
+    // change to the table fails this test.
+    const ALL_CONTRACT: ContractStatus[] = ["Open", "Claimed", "Resolved", "Expired"];
+    const LEGAL_CONTRACT: [ContractStatus, ContractStatus][] = [
+      ["Open", "Claimed"],
+      ["Open", "Expired"],
+      ["Claimed", "Open"],
+      ["Claimed", "Resolved"],
+      ["Claimed", "Expired"],
+    ];
+    const pairs = ALL_CONTRACT.flatMap((from) => ALL_CONTRACT.map((to) => [from, to] as const));
+
+    it("covers 16 pairs with 5 legal", () => {
+      expect(pairs).toHaveLength(16);
+      expect(LEGAL_CONTRACT).toHaveLength(5);
+    });
+
+    it.each(pairs)("%s -> %s returns the expected result or throws", (from, to) => {
+      const legal = LEGAL_CONTRACT.some(([f, t]) => f === from && t === to);
+      if (legal) {
+        expect(transitionContract(from, to)).toBe(to);
+      } else {
+        expect(() => transitionContract(from, to)).toThrow(InvalidTransitionError);
+      }
+    });
+
+    it("has no outgoing transitions from Resolved or Expired", () => {
+      for (const terminal of ["Resolved", "Expired"] as const) {
+        for (const to of ALL_CONTRACT) {
+          expect(() => transitionContract(terminal, to)).toThrow(InvalidTransitionError);
+        }
+      }
+    });
+  });
 });
 
 describe("applyFindingTransition", () => {
