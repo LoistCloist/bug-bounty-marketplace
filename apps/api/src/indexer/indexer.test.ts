@@ -7,7 +7,8 @@ import type { ChainLog } from "./events.js";
 import { MemoryFindingStatusStore } from "../status/memory-finding-status.js";
 import type { FindingStatus } from "@bbm/shared";
 import { runOnce, startEventIndexer, type EventIndexerOptions, type IndexerChainClient } from "./indexer.js";
-import { MemoryIndexerRepository } from "./memory-repository.js";
+import { MemoryIndexerLock, MemoryIndexerRepository } from "./memory-repository.js";
+import type { IndexerLock } from "./repository.js";
 
 const ESCROW = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512" as Address;
 const DISPUTES = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0" as Address;
@@ -88,6 +89,7 @@ function setup(head: bigint, logs: ChainLog[], overrides: Partial<EventIndexerOp
     repository,
     findingStatus,
     listFindingIds: async () => [FINDING_API_ID],
+    lock: new MemoryIndexerLock(),
     now: () => AT,
     ...overrides,
   };
@@ -118,13 +120,26 @@ describe("runOnce", () => {
     const { options, findingStatus, repository } = setup(10n, [log]);
 
     await runOnce(options);
-    // Rewinding the checkpoint forces the same block to be read again.
-    await repository.setCheckpoint(CHAIN_ID, 0n);
     const replay = await runOnce(options);
 
+    // The checkpoint is past block 5, so the log is not read again at all.
     expect(findingStatus.calls).toHaveLength(1);
     expect(replay.applied).toBe(0);
-    expect(replay.ignored).toBe(1);
+    expect(await repository.hasApplied({ chainId: CHAIN_ID, txHash: log.transactionHash!, logIndex: 0 })).toBe(true);
+  });
+
+  it("replays a log after a crash before the applied marker without writing the status again", async () => {
+    // A crash between the status write and markApplied leaves the status set
+    // but no marker. A fresh repository models that state.
+    const log = verifiedLog(5n, 0);
+    const first = setup(10n, [log]);
+    await runOnce(first.options);
+
+    const replay = await runOnce({ ...first.options, repository: new MemoryIndexerRepository() });
+
+    expect(replay.applied).toBe(1);
+    expect(first.findingStatus.calls).toHaveLength(1);
+    expect(first.findingStatus.statuses.get(FINDING_API_ID)).toBe("Verified");
   });
 
   it("re-reads the checkpoint block on the next run and advances it", async () => {
@@ -292,15 +307,117 @@ describe("runOnce", () => {
     expect(findingStatus.calls).toEqual([]);
   });
 
-  it("ignores a status event for a finding the API does not know", async () => {
-    const { options, findingStatus } = setup(10n, [verifiedLog(5n, 0)], {
+  it("stores an event for an unknown finding as pending and advances the checkpoint past it", async () => {
+    const { options, findingStatus, repository } = setup(10n, [verifiedLog(5n, 0)], {
       listFindingIds: async () => ["finding_other"],
     });
 
     const result = await runOnce(options);
 
     expect(findingStatus.calls).toEqual([]);
-    expect(result.ignored).toBe(1);
+    expect(result).toMatchObject({ pending: 1, applied: 0 });
+    expect(await repository.getCheckpoint(CHAIN_ID)).toBe(10n);
+    const [held] = await repository.listPending(CHAIN_ID);
+    expect(held).toMatchObject({ logIndex: 0, blockNumber: 5n, address: ESCROW });
+    expect(await repository.hasApplied({ chainId: CHAIN_ID, txHash: held!.txHash, logIndex: 0 })).toBe(false);
+  });
+
+  it("applies a pending event on the run after its finding is added, without re-reading its block", async () => {
+    let ids: string[] = ["finding_other"];
+    const { chain, options, findingStatus, repository } = setup(10n, [verifiedLog(5n, 0)], {
+      listFindingIds: async () => ids,
+    });
+    await runOnce(options);
+
+    ids = [FINDING_API_ID];
+    chain.getLogs.mockClear();
+    const second = await runOnce(options);
+
+    expect(findingStatus.statuses.get(FINDING_API_ID)).toBe("Verified");
+    expect(second).toMatchObject({ applied: 1, pending: 0 });
+    expect(await repository.listPending(CHAIN_ID)).toEqual([]);
+    // Only the checkpoint block is re-read; block 5 comes from the stored log.
+    expect(chain.getLogs.mock.calls.every(([args]) => args.fromBlock >= 10n)).toBe(true);
+  });
+
+  it("applies pending events in block order when a finding is added", async () => {
+    let ids: string[] = ["finding_other"];
+    const logs = [
+      verifiedLog(4n, 0),
+      makeLog(bountyEscrowAbi, "Frozen", { contractId: CONTRACT_KEY, findingId: FINDING_KEY }, spot(6n, 0)),
+    ];
+    const { options, findingStatus } = setup(10n, logs, { listFindingIds: async () => ids });
+    await runOnce(options);
+
+    ids = [FINDING_API_ID];
+    await runOnce(options);
+
+    expect(findingStatus.calls.map((c) => c.status)).toEqual(["Verified", "Disputed"]);
+  });
+
+  it("drops a pending event once it is older than pendingMaxAgeBlocks", async () => {
+    const { options, repository } = setup(10n, [verifiedLog(5n, 0)], {
+      listFindingIds: async () => ["finding_other"],
+    });
+    await runOnce(options);
+    expect(await repository.listPending(CHAIN_ID)).toHaveLength(1);
+
+    // Head 10, max age 2: cutoff block 8, so the block-5 log is dropped.
+    const result = await runOnce({ ...options, pendingMaxAgeBlocks: 2n });
+
+    expect(result.pruned).toBe(1);
+    expect(await repository.listPending(CHAIN_ID)).toEqual([]);
+  });
+
+  it("keeps pending events when pendingMaxAgeBlocks is unset", async () => {
+    const { options, repository } = setup(100n, [verifiedLog(5n, 0)], {
+      listFindingIds: async () => ["finding_other"],
+    });
+
+    await runOnce(options);
+    const later = await runOnce(options);
+
+    expect(later.pruned).toBe(0);
+    expect(await repository.listPending(CHAIN_ID)).toHaveLength(1);
+  });
+});
+
+describe("runOnce leader lock", () => {
+  class HeldLock implements IndexerLock {
+    tryAcquire = vi.fn(async () => false);
+    release = vi.fn(async () => {});
+  }
+
+  it("does nothing when another runner holds the lock", async () => {
+    const lock = new HeldLock();
+    const { chain, options, repository, findingStatus } = setup(10n, [verifiedLog(5n, 0)], { lock });
+
+    const result = await runOnce(options);
+
+    expect(result).toMatchObject({ skipped: true, fromBlock: null, toBlock: null, applied: 0 });
+    expect(chain.getLogs).not.toHaveBeenCalled();
+    expect(findingStatus.calls).toEqual([]);
+    expect(await repository.getCheckpoint(CHAIN_ID)).toBeNull();
+    expect(lock.release).not.toHaveBeenCalled();
+  });
+
+  it("releases the lock after a run, even when the run fails", async () => {
+    const lock = { tryAcquire: vi.fn(async () => true), release: vi.fn(async () => {}) };
+    const { options } = setup(10n, [], { lock, listFindingIds: async () => { throw new Error("db down"); } });
+
+    await expect(runOnce(options)).rejects.toThrow("db down");
+    expect(lock.release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("checkpoint", () => {
+  it("never moves backwards in the memory repository", async () => {
+    const repository = new MemoryIndexerRepository();
+    await repository.setCheckpoint(CHAIN_ID, 10n);
+    await repository.setCheckpoint(CHAIN_ID, 5n);
+    await repository.setCheckpoint(CHAIN_ID, 10n);
+
+    expect(await repository.getCheckpoint(CHAIN_ID)).toBe(10n);
   });
 });
 
@@ -314,6 +431,7 @@ describe("startEventIndexer", () => {
       repository: new MemoryIndexerRepository(),
       findingStatus: new RecordingFindingStatus(),
       listFindingIds: async () => [],
+      lock: new MemoryIndexerLock(),
       createClient,
     });
 

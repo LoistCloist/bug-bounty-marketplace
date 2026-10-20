@@ -18,3 +18,18 @@ CREATE TABLE IF NOT EXISTS indexer_applied_events (
   applied_at    TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (chain_id, tx_hash, log_index)
 );
+
+-- Logs for findings the API did not know yet when the log was read. Kept
+-- until the finding exists (then applied and removed) or until pruned by the
+-- optional max age. Stores the raw log so retries never re-read blocks.
+CREATE TABLE IF NOT EXISTS indexer_pending_events (
+  chain_id      INTEGER NOT NULL,
+  tx_hash       TEXT NOT NULL,
+  log_index     INTEGER NOT NULL,
+  address       TEXT NOT NULL,
+  topics        TEXT[] NOT NULL,
+  data          TEXT NOT NULL,
+  block_number  NUMERIC(78,0) NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (chain_id, tx_hash, log_index)
+);
