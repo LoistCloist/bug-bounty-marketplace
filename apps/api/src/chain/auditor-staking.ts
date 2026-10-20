@@ -1,5 +1,6 @@
 import type { Account, Address, Chain, Hash, PublicClient, Transport, WalletClient } from "viem";
 import { auditorStakingAbi } from "@bbm/shared";
+import { awaitSuccess } from "./tx.js";
 
 /** The operator-side view of AuditorStaking the API needs. */
 export interface AuditorStakingPort {
@@ -27,11 +28,7 @@ export function createAuditorStakingPort(deps: AuditorStakingDeps): AuditorStaki
       args: [auditor],
       chain: undefined,
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    if (receipt.status !== "success") {
-      throw new Error(`AuditorStaking.${functionName} reverted in ${hash}`);
-    }
-    return hash;
+    return awaitSuccess(publicClient, hash, `AuditorStaking.${functionName}`);
   }
 
   return {
