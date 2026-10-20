@@ -1,0 +1,13 @@
+{
+  "body": {
+    "error": "Invalid contract submission",
+    "issues": [
+      "Filename must end in .sol",
+      "Must be a valid 0x-prefixed 40 hex character address",
+      "Too small: expected number to be >0",
+      "Too small: expected string to have >=1 characters",
+      "Invalid ISO datetime"
+    ]
+  },
+  "status": 400
+}
