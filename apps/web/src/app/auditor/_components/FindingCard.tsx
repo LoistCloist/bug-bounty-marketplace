@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import type { Finding } from "@bbm/shared";
 import { auditorApi, ApiError } from "@/lib/api";
@@ -39,6 +39,11 @@ export function FindingCard({
   onChanged: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
   const [fileError, setFileError] = useState<string | null>(null);
 
   const submitPocMutation = useMutation({
@@ -62,8 +67,12 @@ export function FindingCard({
   });
 
   const changedAt = lastChangedAt(finding);
-  const canActOnFinding = finding.status === "Flagged";
-  const canUploadPoc = finding.status === "Flagged" && stakeMet;
+  const ownsClaim =
+    finding.claimedByAuditorId === auditorId &&
+    !!finding.claimExpiresAt &&
+    new Date(finding.claimExpiresAt).getTime() > now;
+  const canActOnFinding = finding.status === "Flagged" && ownsClaim;
+  const canUploadPoc = canActOnFinding && stakeMet;
 
   return (
     <li className="rounded-lg border border-slate-800 bg-slate-900 p-4">
@@ -73,7 +82,9 @@ export function FindingCard({
         >
           {finding.severity}
         </span>
-        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_STYLES[finding.status]}`}>
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_STYLES[finding.status]}`}
+        >
           {finding.status}
         </span>
         <span className="text-xs text-slate-500">{finding.slitherDetector}</span>
@@ -85,6 +96,31 @@ export function FindingCard({
       </div>
 
       <p className="mt-2 text-sm text-slate-300">{finding.llmExplanation}</p>
+      <details className="mt-4 text-xs text-slate-400">
+        <summary className="text-emerald-300">Finding status history</summary>
+        <ol className="mt-3 space-y-2">
+          {finding.statusHistory.map((event, index) => (
+            <li key={index}>
+              {event.status} · {new Date(event.changedAt).toLocaleString()}
+            </li>
+          ))}
+        </ol>
+      </details>
+      {!ownsClaim && finding.status === "Flagged" && (
+        <p className="mt-3 text-sm text-amber-300">
+          An active claim is required to review this finding.
+        </p>
+      )}
+      {finding.status === "Verified" && (
+        <p className="mt-3 text-sm text-emerald-300">
+          Exploit verified in the demo sandbox. Awaiting the challenge window before payout.
+        </p>
+      )}
+      {finding.status === "Paid" && (
+        <p className="mt-3 text-sm text-emerald-300">
+          Demo bounty paid. This finding has completed the review lifecycle.
+        </p>
+      )}
 
       {finding.isFalsePositive && (
         <p className="mt-2 text-xs italic text-slate-500">Marked false positive by auditor.</p>
@@ -118,6 +154,10 @@ export function FindingCard({
                   setFileError("PoC file must be a Foundry test (filename ending in .t.sol).");
                   return;
                 }
+                if (file.size === 0 || file.size > 102_400) {
+                  setFileError("Choose a nonempty PoC file up to 100 KB.");
+                  return;
+                }
                 setFileError(null);
                 submitPocMutation.mutate();
               }}
@@ -149,6 +189,11 @@ export function FindingCard({
       )}
 
       {fileError && <p className="mt-2 text-sm text-red-400">{fileError}</p>}
+      {falsePositiveMutation.isError && (
+        <p role="alert" className="mt-2 text-sm text-red-400">
+          Could not mark this finding as a false positive. Try again.
+        </p>
+      )}
     </li>
   );
 }

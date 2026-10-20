@@ -74,7 +74,7 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <span
             className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${SEVERITY_STYLES[finding.severity]}`}
           >
@@ -89,6 +89,17 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
       </div>
 
       <p className="mt-3 text-sm text-slate-300">{finding.llmExplanation}</p>
+      <p className="mt-2 text-xs text-slate-500">AI explanation · advisory only</p>
+      <details className="mt-4 text-xs text-slate-400">
+        <summary className="text-emerald-300">Finding status history</summary>
+        <ol className="mt-3 space-y-2">
+          {finding.statusHistory.map((event, index) => (
+            <li key={index}>
+              {event.status} · {formatTimestamp(event.changedAt)}
+            </li>
+          ))}
+        </ol>
+      </details>
 
       <div className="mt-4">
         <button
@@ -99,16 +110,22 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
           {showRaw ? "Hide raw Slither output" : "Show raw Slither output"}
         </button>
         {showRaw && (
-          <pre className="mt-2 overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-slate-400">
-            {finding.rawOutputReference}
-          </pre>
+          <div>
+            <p className="mt-2 text-xs text-slate-500">
+              Output reference only. Full Slither output requires the analysis service integration.
+            </p>
+            <pre className="mt-2 overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-slate-400">
+              {finding.rawOutputReference}
+            </pre>
+          </div>
         )}
       </div>
 
       {canDispute && (
         <div className="mt-4 border-t border-slate-800 pt-4">
           <p className="text-xs text-slate-400">
-            Challenge window closes in <span className="font-semibold text-amber-400">{remaining}</span>
+            Challenge window closes in{" "}
+            <span className="font-semibold text-amber-400">{remaining}</span>
           </p>
           {!showDisputeForm ? (
             <button
@@ -127,6 +144,7 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
               className="mt-2 space-y-2"
             >
               <textarea
+                aria-label="Reason for dispute"
                 required
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
@@ -138,7 +156,7 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
               <div className="flex gap-2">
                 <button
                   type="submit"
-                  disabled={disputeMutation.isPending}
+                  disabled={disputeMutation.isPending || !reason.trim()}
                   className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-medium text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {disputeMutation.isPending ? "Submitting..." : "Submit dispute"}
