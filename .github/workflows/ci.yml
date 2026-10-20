@@ -405,15 +405,20 @@ jobs:
       # System test tiers against the running stack (see tests/README.md).
       # BBM_* URLs default to the compose ports; deployments JSON comes from
       # the contracts-deploy step above.
+      - name: Lint and typecheck system tests
+        run: |
+          pnpm --filter @bbm/system-tests run lint
+          pnpm --filter @bbm/system-tests run typecheck
+
       - name: Integration tests
         run: pnpm --filter @bbm/system-tests run test:integration
 
       - name: Regression tests (API goldens)
-        env:
-          CI: 'true'
         run: pnpm --filter @bbm/system-tests run test:regression
 
       - name: Smoke tests
+        env:
+          BBM_SMOKE_WRITE: '1'
         run: pnpm --filter @bbm/system-tests run test:smoke
 
       - name: Install Playwright browser

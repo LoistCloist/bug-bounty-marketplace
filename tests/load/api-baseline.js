@@ -51,7 +51,8 @@ export const options = {
   },
 };
 
-// Same bytes as tests/fixtures/Sample.sol, inlined so stdin runs work.
+// Same contract as tests/fixtures/Sample.sol (minus its doc comments, so the
+// hash differs), inlined so stdin runs work.
 const SAMPLE_SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 

@@ -9,10 +9,14 @@ import { getJson, postForm } from "../lib/http.js";
  * ACA pipeline-test env, a PR preview, staging, prod) via BBM_API_URL /
  * BBM_WEB_URL. Whole suite should finish in well under 10s.
  *
- *   BBM_SMOKE_READONLY=1  skip the create+read round-trip (prod)
+ *   BBM_SMOKE_WRITE=1     also run the create+read round-trip. Off by
+ *                         default so pointing smoke at prod never writes;
+ *                         CI and non-prod deploys opt in.
+ *   BBM_SMOKE_READONLY=1  force read-only even if BBM_SMOKE_WRITE is set
  *   BBM_SKIP_ANALYSIS=1   skip analysis /health (internal-only on ACA/AKS)
  */
-const readonly = process.env.BBM_SMOKE_READONLY === "1";
+const readonly =
+  process.env.BBM_SMOKE_WRITE !== "1" || process.env.BBM_SMOKE_READONLY === "1";
 const skipAnalysis = process.env.BBM_SKIP_ANALYSIS === "1";
 
 // Per-request budget: a smoke check that needs longer than this is a failure.

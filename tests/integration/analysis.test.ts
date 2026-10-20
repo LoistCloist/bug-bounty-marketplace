@@ -3,7 +3,7 @@ import { env } from "../lib/env.js";
 
 // The analysis worker is always up in docker compose, but on Azure Container
 // Apps it is optional and internal-only (not reachable from the runner), so
-// the deploy workflow sets BBM_SKIP_ANALYSIS=1.
+// the Azure workflows set BBM_SKIP_ANALYSIS=1.
 const skip = process.env.BBM_SKIP_ANALYSIS === "1";
 
 describe.skipIf(skip)("analysis worker", () => {

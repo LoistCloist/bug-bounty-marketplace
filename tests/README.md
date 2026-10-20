@@ -9,15 +9,15 @@ This package has no `test` script on purpose. That means `pnpm -r test` and
 
 ## Test tiers
 
-| Tier | Where | Runner | When in CI | Network |
-|---|---|---|---|---|
-| **Unit** | `apps/*/src/**/*.test.ts(x)`, `packages/shared`, `contracts/test` (forge), `workers/analysis/tests` | vitest (+ MSW in `apps/web`), `forge test`, pytest | `ci.yml` per-package jobs, on every PR (path-filtered) | None. HTTP is mocked (MSW / `app.inject`), and pytest blocks sockets. |
-| **DB integration** | `apps/api/src/**/pg-repository.test.ts` | vitest | `ci.yml` `api` job, with a `postgres` service container (`DATABASE_URL`) | Local Postgres only. Skipped when `DATABASE_URL` is unset. |
-| **System integration** | `tests/integration/` | vitest project `integration` | `ci.yml` `system` job, against the compose stack. Also `integration-azure.yml`, against the ACA test env. | Only the stack under test (`BBM_*` URLs). No third-party calls. |
-| **Regression** | `tests/regression/` (API goldens), `contracts/.gas-snapshot`, `packages/shared/schema` drift | vitest project `regression`, `forge snapshot --check`, `git diff --exit-code` | `ci.yml`: `system` job (goldens), `contracts` job (gas), `shared` job (schema) | Stack under test only (goldens). The other two checks are offline. |
-| **Smoke** | `tests/smoke/` | vitest project `smoke` | `ci.yml` `system` job. In Azure: after every ACA test-env / preview deploy and after `deploy.yml` / `env-power resume` on staging/prod. | Stack under test only. Read-only on prod (`BBM_SMOKE_READONLY=1`). |
-| **E2E** | `tests/e2e/` | Playwright (chromium) | `integration-azure.yml`, against the ACA test env's `web_url` | Browser → web under test only |
-| **Load** | `tests/load/` | k6 (`grafana/k6:2.3.0`) | `integration-azure.yml` when dispatched with `load: true` (manual) | API under test only. Never prod, because setup writes a row. |
+| Tier                   | Where                                                                                               | Runner                                                                        | When in CI                                                                                                                                  | Network                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| **Unit**               | `apps/*/src/**/*.test.ts(x)`, `packages/shared`, `contracts/test` (forge), `workers/analysis/tests` | vitest (+ MSW in `apps/web`), `forge test`, pytest                            | `ci.yml` per-package jobs, on every PR (path-filtered)                                                                                      | None. HTTP is mocked (MSW / `app.inject`), and pytest blocks sockets.             |
+| **DB integration**     | `apps/api/src/**/pg-repository.test.ts`                                                             | vitest                                                                        | `ci.yml` `api` job, with a `postgres` service container (`DATABASE_URL`)                                                                    | Local Postgres only. Skipped when `DATABASE_URL` is unset.                        |
+| **System integration** | `tests/integration/`                                                                                | vitest project `integration`                                                  | `ci.yml` `containers` job, against the compose stack. Also `integration-azure.yml`, against the ACA test env.                               | Only the stack under test (`BBM_*` URLs). No third-party calls.                   |
+| **Regression**         | `tests/regression/` (API goldens), `contracts/.gas-snapshot`, `packages/shared/schema` drift        | vitest project `regression`, `forge snapshot --check`, `git diff --exit-code` | `ci.yml`: `containers` job (goldens), `contracts` job (gas), `shared` job (schema)                                                          | Stack under test only (goldens). The other two checks are offline.                |
+| **Smoke**              | `tests/smoke/`                                                                                      | vitest project `smoke`                                                        | `ci.yml` `containers` job. In Azure: after every ACA test-env / preview deploy and after `deploy.yml` / `env-power resume` on staging/prod. | Stack under test only. Read-only unless `BBM_SMOKE_WRITE=1` (never set for prod). |
+| **E2E**                | `tests/e2e/`                                                                                        | Playwright (chromium)                                                         | `ci.yml` `containers` job (compose stack). Also `integration-azure.yml`, against the ACA test env's `web_url`                               | Browser → web under test only                                                     |
+| **Load**               | `tests/load/`                                                                                       | k6 (`grafana/k6:2.3.0`)                                                       | `integration-azure.yml` when dispatched with `load: true` (manual)                                                                          | API under test only. Never prod, because setup writes a row.                      |
 
 ## Running locally
 
@@ -45,17 +45,18 @@ The root `test:*` scripts forward to
 The defaults match the compose ports, so you only set these to target
 something else.
 
-| Var | Default | Used by |
-|---|---|---|
-| `BBM_API_URL` | `http://localhost:3001` | integration, regression, smoke, plus the globalSetup health wait |
-| `BBM_WEB_URL` | `http://localhost:3000` | integration (proxy), smoke, e2e (`baseURL`) |
-| `BBM_ANALYSIS_URL` | `http://localhost:8000` | integration, smoke |
-| `BBM_RPC_URL` | `http://localhost:8545` | integration/chain |
-| `BBM_DEPLOYMENTS_FILE` | `.ci/deployments/31337.json` | integration/chain. The tests skip when the file is missing. |
-| `BBM_SKIP_ANALYSIS` | unset | `1` skips analysis checks. Analysis is internal-only on ACA/AKS. |
-| `BBM_SMOKE_READONLY` | unset | `1` skips smoke's create+read round-trip (prod) |
-| `BBM_WAIT_MS` | `30000` | How long globalSetup waits for `GET /health` |
-| `CI` | unset | Playwright: 1 retry, `forbidOnly`, GitHub reporter |
+| Var                    | Default                      | Used by                                                          |
+| ---------------------- | ---------------------------- | ---------------------------------------------------------------- |
+| `BBM_API_URL`          | `http://localhost:3001`      | integration, regression, smoke, plus the globalSetup health wait |
+| `BBM_WEB_URL`          | `http://localhost:3000`      | integration (proxy), smoke, e2e (`baseURL`)                      |
+| `BBM_ANALYSIS_URL`     | `http://localhost:8000`      | integration, smoke                                               |
+| `BBM_RPC_URL`          | `http://localhost:8545`      | integration/chain                                                |
+| `BBM_DEPLOYMENTS_FILE` | `.ci/deployments/31337.json` | integration/chain. The tests skip when the file is missing.      |
+| `BBM_SKIP_ANALYSIS`    | unset                        | `1` skips analysis checks. Analysis is internal-only on ACA/AKS. |
+| `BBM_SMOKE_WRITE`      | unset                        | `1` adds smoke's create+read round-trip (CI, non-prod deploys)   |
+| `BBM_SMOKE_READONLY`   | unset                        | `1` forces read-only even when `BBM_SMOKE_WRITE=1`               |
+| `BBM_WAIT_MS`          | `30000`                      | How long globalSetup waits for `GET /health`                     |
+| `CI`                   | unset                        | Playwright: 1 retry, `forbidOnly`, GitHub reporter               |
 
 The vitest globalSetup fails fast with a clear message if the API isn't
 reachable. Without it, every test would time out separately.
@@ -84,6 +85,9 @@ The other regression gates have their own update commands:
 
 ## Pointing the suites at Azure
 
+> The Azure workflows below land in the `ci/azure-workflows` sub-branch of
+> `feat/m3-devops`; until then only the compose-based `containers` job runs.
+
 The Azure workflows don't build anything test-specific. They export the
 `BBM_*` env from Terraform outputs and run the same commands:
 
@@ -101,13 +105,13 @@ The Azure workflows don't build anything test-specific. They export the
   with the preview URLs and `BBM_SKIP_ANALYSIS=1`.
 - **`deploy.yml` / `env-power.yml resume`** (AKS staging/prod) run
   `pnpm test:smoke` with `BBM_API_URL` / `BBM_WEB_URL` set to the ingress
-  host. Prod also sets `BBM_SMOKE_READONLY=1` and `BBM_SKIP_ANALYSIS=1`.
+  host. Non-prod sets `BBM_SMOKE_WRITE=1`; all AKS/ACA runs set `BBM_SKIP_ANALYSIS=1`.
 
 The CI commands are:
 
 ```sh
 # smoke (any env)
-BBM_API_URL=... BBM_WEB_URL=... BBM_SKIP_ANALYSIS=1 [BBM_SMOKE_READONLY=1] \
+BBM_API_URL=... BBM_WEB_URL=... BBM_SKIP_ANALYSIS=1 [BBM_SMOKE_WRITE=1] \
   pnpm --filter @bbm/system-tests run test:smoke
 
 # e2e
