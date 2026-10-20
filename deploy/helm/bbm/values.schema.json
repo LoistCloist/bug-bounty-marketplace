@@ -533,6 +533,10 @@
             "enabled"
           ],
           "additionalProperties": true
+        },
+        "strategy": {
+          "type": "object",
+          "additionalProperties": true
         }
       },
       "required": [
@@ -901,6 +905,10 @@
       "type": "object",
       "properties": {
         "image": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mirrorImage": {
           "type": "string",
           "minLength": 1
         }

@@ -156,9 +156,13 @@ spec:
       ports:
         - port: {{ .Values.api.port }}
           protocol: TCP
-{{- if and .Values.migrations.enabled $np.postgresCidr }}
+{{- if $np.postgresCidr }}
 ---
-# Applies on pre-upgrade (on first install the policies don't exist yet).
+# Rendered whenever egress is restricted, independent of
+# migrations.enabled: hooks run before the release manifest is applied, so
+# a policy rendered only with migrations.enabled would not exist yet on the
+# pre-upgrade that first turns migrations on, and the Job could not reach
+# Postgres. On first install no policies exist yet, so nothing blocks it.
 # Key Vault / Entra are reached by the CSI driver on the node, not this pod.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

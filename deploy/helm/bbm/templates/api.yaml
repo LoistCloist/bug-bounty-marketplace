@@ -12,6 +12,24 @@ spec:
   {{- if not $v.hpa.enabled }}
   replicas: {{ $v.replicaCount }}
   {{- end }}
+  {{- /*
+  With a single replica, a surge pod would get its own empty upload
+  emptyDir (SOURCE_STORAGE_DIR) while the old pod still serves, and the HPA
+  max of 1 would be exceeded during rollouts. Default to replace-in-place
+  (maxSurge 0 / maxUnavailable 1) whenever at most one api replica can run;
+  api.strategy overrides this verbatim.
+  */}}
+  {{- $maxReplicas := ternary $v.hpa.maxReplicas $v.replicaCount $v.hpa.enabled | int }}
+  {{- if $v.strategy }}
+  strategy:
+    {{- toYaml $v.strategy | nindent 4 }}
+  {{- else if le $maxReplicas 1 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  {{- end }}
   revisionHistoryLimit: 5
   selector:
     matchLabels:

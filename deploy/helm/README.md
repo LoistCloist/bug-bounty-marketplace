@@ -62,7 +62,15 @@ SecretProviderClass or Ingress.
 > **API replicas.** Uploaded sources are stored on a per-pod `emptyDir`
 > (`SOURCE_STORAGE_DIR=/data/sources`). Because of that, the api must stay at
 > exactly one replica in every environment until a Blob storage adapter
-> lands. Both env files pin the api HPA to `min 1 / max 1`.
+> lands. Both env files pin the api HPA to `min 1 / max 1`. While at most one
+> replica can run, the Deployment uses `RollingUpdate` with `maxSurge 0` /
+> `maxUnavailable 1` (replace in place, brief downtime on rollout).
+> `api.strategy` overrides it.
+
+> **Staging node placement.** `values-staging.yaml` leaves
+> `global.nodeSelector` empty on purpose. The staging apps pool is disabled
+> by default to save vCPU quota, so app pods run on the system pool. Prod
+> pins them to `bbm.io/pool=apps`.
 
 ## Secrets (`secrets.provider`)
 
@@ -99,9 +107,25 @@ Job needs is itself a hook:
 
 | weight | resource | delete policy |
 |---|---|---|
-| -10 | ServiceAccount `bbm-migrations` | `before-hook-creation` + `resource-policy: keep` |
+| -10 | ServiceAccount `bbm-migrations` | `before-hook-creation,hook-succeeded` |
 | -10 | Secret `bbm-secrets-migrations` (plain) **or** SecretProviderClass `bbm-kv-migrations` (csi) | same |
-| -5 | Job `bbm-migrations` (`backoffLimit 1`, `activeDeadlineSeconds 300`) | `before-hook-creation,hook-succeeded` |
+| -5 | Job `bbm-migrations` (`backoffLimit 1`, `activeDeadlineSeconds 300`) | same |
+
+Helm applies `hook-succeeded` only once **every** hook of the event has
+finished (see `pkg/action/hooks.go`), not right after each one. The weight
+-10 resources therefore survive until the -5 Job completes. After that, all
+three are deleted, which also removes the plain-text `bbm-secrets-migrations`
+copy. With csi, the synced Secret goes away together with the Job pod.
+
+Helm never deletes hook resources on `helm uninstall`, so this policy is
+what keeps them from piling up. If a migration **fails**, Helm still
+deletes the -10 hooks (they succeeded). The failed Job is kept for
+`kubectl logs` and is replaced by the next deploy (`before-hook-creation`).
+After an uninstall that followed a failed migration, remove it by hand:
+
+```sh
+kubectl -n bbm delete job bbm-migrations --ignore-not-found
+```
 
 The hook copies have their own names, and `bbm-migrations` is never rendered
 as a regular resource. This prevents a clash between a hook-owned object and
@@ -183,7 +207,15 @@ helm test bbm -n bbm --timeout 5m
 ```
 
 `helm test` runs a curl pod against `bbm-api:3001/health` and
-`bbm-web:3000/healthz`.
+`bbm-web:3000/healthz`. When `global.image.registry` is set (staging/prod),
+the pod pulls `<registry>/mirror/curl:8.10.1` (`tests.mirrorImage`) instead
+of Docker Hub's `curlimages/curl:8.10.1` (`tests.image`). Mirror it into each
+ACR once, and again whenever you bump the tag:
+
+```sh
+az acr import --name <acr> \
+  --source docker.io/curlimages/curl:8.10.1 --image mirror/curl:8.10.1
+```
 
 ## Cluster prerequisites (provided by the terraform compute stack)
 

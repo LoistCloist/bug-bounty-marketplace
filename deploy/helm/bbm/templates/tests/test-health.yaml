@@ -21,7 +21,12 @@ spec:
   {{- with (include "bbm.tolerations" (dict "root" $ "values" dict) | trim) }}{{ . | nindent 2 }}{{- end }}
   containers:
     - name: health
+      {{- $reg := .Values.global.image.registry }}
+      {{- if $reg }}
+      image: {{ printf "%s/%s" (trimSuffix "/" $reg) .Values.tests.mirrorImage }}
+      {{- else }}
       image: {{ .Values.tests.image }}
+      {{- end }}
       command: ["sh", "-c"]
       args:
         - |

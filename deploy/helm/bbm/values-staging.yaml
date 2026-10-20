@@ -9,6 +9,13 @@
 # IDs, Key Vault, storage, ingress host/PIP, Postgres CIDR) comes from
 # values-infra.yaml and is intentionally NOT set here.
 
+global:
+  # Deliberately unpinned (unlike prod's bbm.io/pool=apps): the staging apps
+  # node pool is disabled by default in terraform to save vCPU quota, so the
+  # app pods run on the system pool. Pin to bbm.io/pool=apps here only after
+  # enabling that pool in the staging compute stack.
+  nodeSelector: {}
+
 config:
   logLevel: debug
 

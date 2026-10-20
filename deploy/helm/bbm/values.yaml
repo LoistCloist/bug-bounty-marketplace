@@ -198,6 +198,12 @@ api:
   pdb:
     enabled: false
     minAvailable: 1
+  # -- Deployment strategy, used verbatim when non-empty. Empty = automatic:
+  # when at most one api replica can run (hpa.maxReplicas, or replicaCount
+  # without HPA, <= 1) use RollingUpdate maxSurge 0 / maxUnavailable 1, so a
+  # rollout never runs a second pod with its own per-pod upload emptyDir
+  # (brief downtime instead); otherwise the Kubernetes default.
+  strategy: {}
   extraEnv: []
   podAnnotations: {}
   podLabels: {}
@@ -340,5 +346,10 @@ networkPolicy:
   ingressControllerNamespace: app-routing-system
 
 tests:
-  # -- Image used by the `helm test` pod.
+  # -- Image used by the `helm test` pod when global.image.registry is empty
+  # (Docker Hub, e.g. kind / ct install).
   image: curlimages/curl:8.10.1
+  # -- Repository:tag of the same image inside global.image.registry, used
+  # when a registry is set (staging/prod pull <acr>/mirror/curl:8.10.1).
+  # Mirror it with `az acr import` (see deploy/helm/README.md).
+  mirrorImage: mirror/curl:8.10.1
