@@ -64,6 +64,9 @@ def run_analysis_job(
         "SELECT filename, source_hash, source_reference FROM contracts WHERE id = %s",
         (job.subject_id,),
     ).fetchone()
+    # End the read transaction now: holding it through Slither and the LLM
+    # would keep a lock on contracts for minutes.
+    conn.commit()
     if contract is None:
         return _final(f"Contract {job.subject_id} not found")
     if settings.source_storage_dir is None:

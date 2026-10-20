@@ -225,3 +225,19 @@ def test_nul_characters_in_slither_output_are_stored_safely(pg_conn, settings, t
     assert "\x00" not in row["llm_explanation"]
     assert "\\0abc" in row["llm_explanation"]
     assert row["raw_output"]["elements"][0] == {"name": "\\0abc", "nested": ["x\\0y"]}
+
+
+def test_no_transaction_is_held_open_while_slither_runs(pg_conn, settings, tmp_path):
+    from psycopg.pq import TransactionStatus
+
+    insert_contract(pg_conn, VAULT, tmp_path)
+    seen = []
+
+    def slither(source, filename, solc_version, timeout_s=120):
+        # An open transaction here would hold a lock on contracts for the whole
+        # Slither + LLM run and block the API's migrations on reboot.
+        seen.append(pg_conn.info.transaction_status)
+        return VAULT_REPORT
+
+    assert run_analysis_job(pg_conn, _claim(pg_conn), settings, FakeExplainer(), slither=slither).ok
+    assert seen == [TransactionStatus.IDLE]
