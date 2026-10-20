@@ -23,26 +23,38 @@ const app = buildApp({
 });
 const port = Number(process.env.PORT ?? 3001);
 
+// app.ts builds Fastify with `logger: false` (keeps tests quiet), so
+// lifecycle messages go to the console directly.
 async function start(): Promise<void> {
   if (pool && migrateOnBoot) {
     const applied = await runMigrations(pool);
-    app.log.info(`applied migrations: ${applied.join(", ")}`);
+    console.log(`@bbm/api applied migrations: ${applied.join(", ") || "(none)"}`);
   }
   await app.listen({ port, host: "0.0.0.0" });
-  app.log.info(`@bbm/api listening on port ${port}`);
+  console.log(`@bbm/api listening on port ${port}`);
 }
+
+/** How long a graceful shutdown may take before the process is forced out. */
+const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 let shuttingDown = false;
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
-  if (shuttingDown) return;
+  if (shuttingDown) {
+    console.error(`@bbm/api received ${signal} again, forcing exit`);
+    process.exit(1);
+  }
   shuttingDown = true;
-  app.log.info(`received ${signal}, shutting down`);
+  console.log(`@bbm/api received ${signal}, shutting down`);
+  setTimeout(() => {
+    console.error(`@bbm/api shutdown did not finish within ${SHUTDOWN_TIMEOUT_MS} ms, forcing exit`);
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS).unref();
   try {
     await app.close();
     await pool?.end();
     process.exit(0);
   } catch (err) {
-    app.log.error(err);
+    console.error("@bbm/api shutdown failed", err);
     process.exit(1);
   }
 }
@@ -51,6 +63,6 @@ process.on("SIGTERM", (signal) => void shutdown(signal));
 process.on("SIGINT", (signal) => void shutdown(signal));
 
 start().catch((err: unknown) => {
-  app.log.error(err);
+  console.error("@bbm/api failed to start", err);
   process.exit(1);
 });

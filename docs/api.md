@@ -20,11 +20,13 @@ environment variables and the local Postgres setup.
 | `DATABASE_URL` | unset | Unset: contracts are held in memory. Set: Postgres-backed repository. |
 | `MIGRATE_ON_BOOT` | `true` | With `DATABASE_URL`, apply migrations at startup. `false`/`0`/`no`/`off` disables it (run `migrate` as a separate step instead). |
 | `PG_POOL_MAX` | `5` | Maximum connections in the Postgres pool. |
+| `MIGRATION_LOCK_TIMEOUT_MS` | `60000` | How long a migration run waits for the advisory lock (via `lock_timeout`) before failing. |
 | `MIGRATIONS_DIR` | `migrations/` next to the running module | Directory of `*.sql` migrations. Resolves to `src/db/migrations` under `dev` and `dist/migrations` in the build. |
 | `SOURCE_STORAGE_DIR` | unset | Unset: uploaded `.sol` bytes are held in memory. Set: written under this directory. |
 
 Migrations are applied in filename order while holding a Postgres advisory
-lock, so several replicas booting at once apply them one at a time.
+lock, so several replicas booting at once apply them one at a time. If a run
+fails, its connection is discarded so the lock is always freed.
 
 ## Scripts
 
@@ -37,7 +39,8 @@ lock, so several replicas booting at once apply them one at a time.
   are inlined; `fastify`, `@fastify/multipart` and `pg` stay external, so a
   runtime image needs `dist/` plus the API's production `node_modules`.
 - `pnpm --filter @bbm/api start` — `node dist/index.js`; SIGTERM/SIGINT close
-  the server and the pool, then exit 0.
+  the server and the pool, then exit 0. A second signal, or a close that takes
+  longer than 10 s, forces exit 1.
 - `pnpm --filter @bbm/api migrate` — `node dist/migrate-cli.js`; applies the
   migrations against `DATABASE_URL` (required) and exits.
 
