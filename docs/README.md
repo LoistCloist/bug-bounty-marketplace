@@ -14,3 +14,7 @@ shows it on the repo front page.
 - [workers/](workers.md): non-TypeScript services (placeholder).
 - [contracts/](contracts/overview.md): Foundry smart-contract project.
   - [Foundry setup](contracts/foundry-setup.md): installing Foundry and building and testing `contracts/`.
+- [adr/](adr/): architecture decision records.
+  - [ADR 0001: Azure environment topology](adr/0001-azure-environment-topology.md): ACA ephemeral envs, AKS per env, data/compute split, OIDC, pinned stack interfaces.
+- [devops/](devops/README.md): Azure infrastructure, deployment and operations.
+  - [Azure bootstrap](devops/azure-bootstrap.md): one-time subscription and GitHub OIDC setup.
