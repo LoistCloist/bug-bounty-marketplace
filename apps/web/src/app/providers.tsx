@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ChainSession } from "@/lib/wallet/chain-session";
 
 // The frontend MVP is self-contained by default; live integration is opt-in.
 const MOCKING_ENABLED = process.env.NEXT_PUBLIC_API_MOCKING !== "disabled";
@@ -18,7 +19,17 @@ export function Providers({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {MOCKING_ENABLED ? <MswProvider>{children}</MswProvider> : children}
+      {MOCKING_ENABLED ? (
+        <MswProvider>
+          <ChainSession />
+          {children}
+        </MswProvider>
+      ) : (
+        <>
+          <ChainSession />
+          {children}
+        </>
+      )}
     </QueryClientProvider>
   );
 }
