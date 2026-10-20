@@ -10,7 +10,7 @@ from pydantic import AwareDatetime, ConfigDict, Field
 from analysis.schema_base import BaseModel
 
 
-class Status(StrEnum):
+class AnalysisJobStatus(StrEnum):
     Queued = "Queued"
     Running = "Running"
     Done = "Done"
@@ -22,7 +22,7 @@ class AnalysisStatus(BaseModel):
         extra="forbid",
     )
     contractId: Annotated[str, Field(min_length=1)]
-    status: Status
+    status: AnalysisJobStatus
     error: str | None
     findingCount: Annotated[int, Field(ge=0, le=9007199254740991)]
     updatedAt: AwareDatetime
@@ -54,26 +54,11 @@ class Bounty(BaseModel):
     deadline: AwareDatetime
 
 
-class Status1(StrEnum):
+class ContractStatus(StrEnum):
     Open = "Open"
     Claimed = "Claimed"
     Resolved = "Resolved"
     Expired = "Expired"
-
-
-class Contract(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    id: Annotated[str, Field(min_length=1)]
-    developerAddress: Annotated[str, Field(pattern="^0x[a-fA-F0-9]{40}$")]
-    filename: Annotated[str, Field(min_length=1)]
-    sourceHash: Annotated[str, Field(min_length=1)]
-    sourceReference: Annotated[str, Field(min_length=1)]
-    bountyId: Annotated[str, Field(min_length=1)]
-    status: Status1
-    createdAt: AwareDatetime
-    deadline: AwareDatetime
 
 
 class Ruling(StrEnum):
@@ -131,6 +116,21 @@ class PoCSubmission(BaseModel):
     submittedAt: AwareDatetime
     sandboxStatus: SandboxStatus
     sandboxLog: str | None
+
+
+class Contract(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    id: Annotated[str, Field(min_length=1)]
+    developerAddress: Annotated[str, Field(pattern="^0x[a-fA-F0-9]{40}$")]
+    filename: Annotated[str, Field(min_length=1)]
+    sourceHash: Annotated[str, Field(min_length=1)]
+    sourceReference: Annotated[str, Field(min_length=1)]
+    bountyId: Annotated[str, Field(min_length=1)]
+    status: ContractStatus
+    createdAt: AwareDatetime
+    deadline: AwareDatetime
 
 
 class StatusHistoryItem(BaseModel):
