@@ -1,10 +1,24 @@
 // @vitest-environment jsdom
 import React, { type ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StakeGate, REQUIRED_STAKE, REQUIRED_STAKE_WEI } from "./StakeGate";
 import { ethToWei } from "@/lib/money";
+import { auditorApi } from "@/lib/api";
+
+// Wrap postStake in a spy that still calls through to the real (MSW-mocked) API.
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    auditorApi: { ...actual.auditorApi, postStake: vi.fn(actual.auditorApi.postStake) },
+  };
+});
+
+const postStake = vi.mocked(auditorApi.postStake);
+
+const INVALID_AMOUNT_MESSAGE = "Enter a stake in ETH, up to 18 decimal places.";
 
 function withQueryClient(children: ReactNode) {
   const queryClient = new QueryClient();
@@ -12,6 +26,11 @@ function withQueryClient(children: ReactNode) {
 }
 
 describe("StakeGate", () => {
+  beforeEach(() => {
+    postStake.mockClear();
+  });
+
+
   it("locks PoC upload below the required stake and shows the shortfall", () => {
     render(
       withQueryClient(
@@ -65,5 +84,48 @@ describe("StakeGate", () => {
     fireEvent.click(screen.getByRole("button", { name: /post stake/i }));
 
     await waitFor(() => expect(onStaked).toHaveBeenCalledTimes(1));
+  });
+
+  function renderGateWithShortfall(onStaked = vi.fn()) {
+    render(
+      withQueryClient(
+        <StakeGate
+          profile={{ id: "auditor_1", address: "0xabc", stake: ethToWei("5000"), reputation: 12, claimedContractIds: [] }}
+          auditorId="auditor_1"
+          onStaked={onStaked}
+        />,
+      ),
+    );
+    return { onStaked, input: screen.getByLabelText("Post stake") as HTMLInputElement };
+  }
+
+  it("rejects exponent notation like 1e3 without calling postStake", () => {
+    const { input } = renderGateWithShortfall();
+
+    fireEvent.change(input, { target: { value: "1e3" } });
+    fireEvent.click(screen.getByRole("button", { name: /post stake/i }));
+
+    expect(screen.getByText(INVALID_AMOUNT_MESSAGE)).toBeInTheDocument();
+    expect(postStake).not.toHaveBeenCalled();
+  });
+
+  it("rejects amounts with more than 18 decimal places without calling postStake", () => {
+    const { input } = renderGateWithShortfall();
+
+    fireEvent.change(input, { target: { value: "0.0000000000000000001" } });
+    fireEvent.click(screen.getByRole("button", { name: /post stake/i }));
+
+    expect(screen.getByText(INVALID_AMOUNT_MESSAGE)).toBeInTheDocument();
+    expect(postStake).not.toHaveBeenCalled();
+  });
+
+  it("posts a valid decimal stake as a wei string", async () => {
+    const { input, onStaked } = renderGateWithShortfall();
+
+    fireEvent.change(input, { target: { value: "2.5" } });
+    fireEvent.click(screen.getByRole("button", { name: /post stake/i }));
+
+    await waitFor(() => expect(onStaked).toHaveBeenCalledTimes(1));
+    expect(postStake).toHaveBeenCalledWith({ auditorId: "auditor_1", amount: "2500000000000000000" });
   });
 });
