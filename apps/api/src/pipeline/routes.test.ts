@@ -320,3 +320,29 @@ describe("POST /api/auditor/poc", () => {
     expect(second.json()).toEqual({ error: "Finding is not Flagged" });
   });
 });
+
+describe("POST /api/auditor/poc when the claim lapses mid-request", () => {
+  it("answers 403 when the repository's in-transaction claim check fails", async () => {
+    const ctx = setup();
+    const { contract } = await ctx.seedContract();
+    const finding = ctx.seedFinding(contract.id);
+    await ctx.claim(contract.id, "auditor_1");
+    // The route's pre-check passes; the claim is gone by the time submitPoc
+    // re-checks it inside its transaction.
+    const pipeline = new MemoryPipelineRepository(ctx.store);
+    pipeline.submitPoc = async () => "no_claim";
+    const app = buildApp({
+      repository: new MemoryContractRepository(ctx.store),
+      pipeline,
+      storage: ctx.storage,
+      config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => T0 },
+    });
+    const body = multipartBody(
+      { findingId: finding.id, auditorId: "auditor_1" },
+      { name: "Exploit.t.sol", content: poc },
+    );
+    const response = await app.inject({ method: "POST", url: "/api/auditor/poc", ...body });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "You do not hold an active claim on this contract" });
+  });
+});
