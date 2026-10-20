@@ -129,6 +129,26 @@ arbiter stay mocked, so those buttons answer "not found" for real contracts
 and the profile's claimed list shows only seeded contracts; keep the demo to
 the pipeline steps.
 
+### Full lifecycle demo (on-chain)
+
+`pnpm stack:demo` starts a fresh demo stack: it removes the previous
+database and chain, starts Postgres and a local anvil chain, deploys the
+contracts with a 60-second challenge window, then starts the API (pointed at
+the deployment through `docker-compose.chain.yml`) and the analysis service
+with the PoC sandbox. It prints the deployment and `GET /api/chain`.
+
+```sh
+pnpm stack:demo
+NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled \
+  API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
+```
+
+The overlay uses anvil's well-known dev keys (local demo only). If an image
+build fails with `error getting credentials` on WSL, Docker Desktop's
+credential helper is unreachable; the images are public, so run it with an
+empty Docker config: `mkdir -p /tmp/dc && echo '{}' > /tmp/dc/config.json &&
+DOCKER_CONFIG=/tmp/dc pnpm stack:demo`.
+
 ## Testing
 
 | Tier               | Where                                                       | Command                                           |
