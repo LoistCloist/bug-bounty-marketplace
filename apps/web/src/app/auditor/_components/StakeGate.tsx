@@ -5,6 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import { compareWei, type AuditorProfile } from "@bbm/shared";
 import { auditorApi, ApiError } from "@/lib/api";
 import { ethToWei, weiToEth } from "@/lib/money";
+import { useChainCalls, useRequiredStakeWei } from "@/lib/chain/use-chain";
 
 /** Minimum stake an auditor must have posted before the PoC-upload UI
  * unlocks, in demo ETH. Deliberately set above the seed auditor's starting
@@ -13,8 +14,8 @@ export const REQUIRED_STAKE = 10_000;
 export const REQUIRED_STAKE_WEI = ethToWei(String(REQUIRED_STAKE));
 
 /** True when a wei stake meets the requirement. Compared exactly, not as numbers. */
-export function isStakeMet(stakeWei: string): boolean {
-  return compareWei(stakeWei, REQUIRED_STAKE_WEI) >= 0;
+export function isStakeMet(stakeWei: string, requiredWei: string = REQUIRED_STAKE_WEI): boolean {
+  return compareWei(stakeWei, requiredWei) >= 0;
 }
 
 export function StakeGate({
@@ -26,30 +27,38 @@ export function StakeGate({
   auditorId: string;
   onStaked: () => void;
 }) {
-  const shortfallWei = BigInt(REQUIRED_STAKE_WEI) - BigInt(profile.stake);
+  const chain = useChainCalls();
+  // On the local chain the requirement is AuditorStaking.REQUIRED_STAKE.
+  const requiredWei = useRequiredStakeWei(REQUIRED_STAKE_WEI);
+  const shortfallWei = BigInt(requiredWei) - BigInt(profile.stake);
   const [amount, setAmount] = useState(shortfallWei > 0n ? weiToEth(shortfallWei.toString()) : "1000");
   const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: (amountWei: string) => auditorApi.postStake({ auditorId, amount: amountWei }),
+    mutationFn: async (amountWei: string) => {
+      // On-chain the auditor stakes from their own wallet; the profile reads it back.
+      if (chain) await chain.stake(amountWei);
+      else await auditorApi.postStake({ auditorId, amount: amountWei });
+    },
     onSuccess: () => {
       setError(null);
       onStaked();
     },
     onError: (err) => {
-      setError(err instanceof ApiError ? err.message : "Failed to post stake.");
+      setError(err instanceof ApiError || chain ? (err as Error).message : "Failed to post stake.");
     },
   });
 
-  const met = isStakeMet(profile.stake);
+  const met = isStakeMet(profile.stake, requiredWei);
 
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="text-sm text-slate-400">Stake · demo units</p>
+          <p className="text-sm text-slate-400">{chain ? "Stake · ETH on the local chain" : "Stake · demo units"}</p>
           <p className="text-lg font-semibold text-white">
-            {Number(weiToEth(profile.stake)).toLocaleString()} / {REQUIRED_STAKE.toLocaleString()} required
+            {Number(weiToEth(profile.stake)).toLocaleString()} /{" "}
+            {Number(weiToEth(requiredWei)).toLocaleString()} required
           </p>
         </div>
         {met ? (

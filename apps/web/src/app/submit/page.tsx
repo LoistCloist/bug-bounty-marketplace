@@ -8,6 +8,7 @@ import { CONTRACT_SOURCE_MAX_BYTES } from "@bbm/shared";
 import { developerApi, ApiError } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
 import { ethToWei } from "@/lib/money";
+import { useChainCalls } from "@/lib/chain/use-chain";
 
 function validateFile(file: File | null): string | null {
   if (!file) return "Choose a .sol file to submit.";
@@ -24,6 +25,7 @@ function validateFile(file: File | null): string | null {
 export default function SubmitPage() {
   const router = useRouter();
   const wallet = useWallet();
+  const chain = useChainCalls();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -56,7 +58,7 @@ export default function SubmitPage() {
       if (!Number.isFinite(new Date(terms.deadline).getTime()) || new Date(terms.deadline).getTime() <= Date.now()) {
         throw new Error("Choose a deadline in the future.");
       }
-      return developerApi.submitContract({
+      const contract = await developerApi.submitContract({
         file: file!,
         developerAddress: wallet.address,
         bountyAmount: bountyWei,
@@ -65,6 +67,19 @@ export default function SubmitPage() {
         // to the full ISO 8601 string the shared Contract schema expects.
         deadline: new Date(terms.deadline).toISOString(),
       });
+      if (chain) {
+        // Lock the bounty in BountyEscrow, then let the API confirm it.
+        try {
+          await chain.fundBounty(contract.id, new Date(contract.deadline), bountyWei);
+        } catch (err) {
+          throw new Error(
+            `Contract uploaded, but funding the bounty failed: ${err instanceof Error ? err.message : String(err)}`,
+            { cause: err },
+          );
+        }
+        await developerApi.markFunded(contract.id);
+      }
+      return contract;
     },
     onSuccess: (contract) => {
       router.push(`/contracts/${contract.id}`);
