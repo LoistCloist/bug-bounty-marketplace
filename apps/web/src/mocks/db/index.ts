@@ -23,6 +23,7 @@ export * from "./disputes";
 export function resetMockDb(): void {
   cancelAllScheduled();
   resetIdCounters();
+  db.claims = {};
   db.contracts = [];
   db.bounties = [];
   db.findings = [];
