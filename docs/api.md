@@ -46,3 +46,20 @@ fails, its connection is discarded so the lock is always freed.
 
 Postgres-backed repository tests run only when `DATABASE_URL` is set; they are
 skipped otherwise.
+
+## Container image
+
+`apps/api/Dockerfile` builds a production image. Build it from the repo root
+with BuildKit (it uses a cache mount for the pnpm store):
+
+```sh
+docker build -f apps/api/Dockerfile -t bbm-api .
+docker run -p 3001:3001 -e DATABASE_URL=postgres://... bbm-api
+docker run --rm -e DATABASE_URL=postgres://... bbm-api node dist/migrate-cli.js
+```
+
+The runtime stage holds only `dist/` plus the production `node_modules` from
+`pnpm deploy --prod`, runs as `node`, and listens on `PORT` (default `3001`).
+`SOURCE_STORAGE_DIR` defaults to `/data/sources`, the only writable directory;
+mount a volume there to keep uploaded sources. The healthcheck calls
+`GET /health`.
