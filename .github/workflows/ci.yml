@@ -95,8 +95,13 @@ jobs:
               - 'workers/sandbox/**'
               - 'workers/analysis/src/analysis/solc-versions.txt'
               - 'workers/analysis/src/analysis/sandbox.py'
+              - 'workers/analysis/src/analysis/sandbox_job.py'
+              - 'workers/analysis/src/analysis/paths.py'
+              - 'workers/analysis/src/analysis/config.py'
               - 'workers/analysis/tests/test_sandbox.py'
               - 'workers/analysis/tests/fixtures/**'
+              - 'workers/analysis/pyproject.toml'
+              - 'workers/analysis/uv.lock'
               - '.github/workflows/ci.yml'
 
             # Anything that can change a container image or the compose
