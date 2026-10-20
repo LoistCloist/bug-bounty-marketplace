@@ -8,8 +8,9 @@ name: Integration (Azure)
 #   state key per run attempt) → test (smoke, integration, e2e, k6) →
 #   destroy (always, unless dispatched with keep_env)
 #
-# Runs on every push to main, nightly, and on demand. Everything is OIDC
-# (GitHub Environment `test` → gh-bbm-ephemeral); there are no secrets.
+# Runs on every push to main, nightly, and on demand (dispatch from main
+# only). Everything is OIDC (GitHub Environment `test` →
+# gh-bbm-ephemeral); there are no secrets.
 # Until the repo vars from the bootstrap stack exist, `gate` skips the
 # whole run. Only push/schedule/dispatch trigger this, so fork PRs never
 # reach Azure.
@@ -46,11 +47,14 @@ env:
 jobs:
   # ---------------------------------------------------------------------
   # AZURE_CLIENT_ID is environment-scoped, so it is invisible here; gate
-  # on the repo-level vars instead.
+  # on the repo-level vars instead. Only main may run: the sha-<7> images
+  # pushed here are what staging/prod deploy (deploy.yml checks their
+  # revision label is on main), so a dispatch from another branch is
+  # skipped rather than pushing non-main images under a sha-* tag.
   # ---------------------------------------------------------------------
   gate:
     name: Gate
-    if: vars.AZURE_SUBSCRIPTION_ID != '' && vars.ACR_NAME != ''
+    if: vars.AZURE_SUBSCRIPTION_ID != '' && vars.ACR_NAME != '' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}

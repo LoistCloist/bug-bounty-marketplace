@@ -22,7 +22,9 @@ stateDiagram-v2
 ```
 
 The current state is stored as tags on the data resource group `rg-bbm-<env>-data-eus2`.
-Terraform ignores these tags.
+Terraform ignores these tags: the bootstrap stack's `lifecycle.ignore_changes` lists exactly
+`power-state`, `auto-pause`, `db-paused`, `bbm-last-deployed-tag`, `paused-at`, `resumed-at`,
+`down-at`, `up-at` and `deployed-at`.
 
 | tag                                                          | values                      | written by                                              |
 | ------------------------------------------------------------ | --------------------------- | ------------------------------------------------------- |
@@ -50,13 +52,16 @@ every action.
 
 ### What it costs
 
-Rough eastus2 list prices (check the Azure pricing calculator for current numbers):
+What each state still bills (see [cost.md](cost.md) for estimates):
 
-| state     | still billed                                                                                                               | roughly           |
-| --------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `running` | nodes (B2als_v2: staging 1, prod 2+), Postgres B1ms compute, plus everything below                                         | ~$1–3 per day     |
-| `paused`  | Postgres storage, the static public IP, the AKS load balancer and its frontend IP, managed disks, Key Vault, storage, logs | ~$0.20–0.50 / day |
-| `down`    | Postgres storage, the static public IP, Key Vault, storage, logs                                                           | ~$0.15–0.30 / day |
+| state     | still billed                                                                                                                    |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `running` | nodes (B2als_v2: staging 1, prod 2+), Postgres B1ms compute, plus everything below                                              |
+| `paused`  | the Standard load balancer and its frontend IP, the static public IP, Postgres storage, managed disks, Key Vault, storage, logs |
+| `down`    | the static public IP, Postgres storage, Key Vault, storage, logs                                                                |
+
+The Standard load balancer bills at its full hourly rate while the cluster is stopped, so `paused`
+is far from free.
 
 AKS is on the Free tier, so a stopped cluster has no control-plane charge. Choose `pause` for
 "off until tomorrow" and `down` for "off for a week or more".
@@ -73,15 +78,35 @@ AKS is on the Free tier, so a stopped cluster has no control-plane charge. Choos
 | scheduled pause / re-pause | none (`staging`)                | none (`prod-power`)                                  |
 
 Anyone with workflow access can turn prod **off**. Turning it **on**, or changing it, needs a
-reviewer. `gh-bbm-prod-power` can only read, start and stop AKS and Postgres and write tags. It has
+reviewer. Manual prod `pause` running in `prod-power` without a reviewer is a deliberate choice:
+pausing only reduces cost and exposure, keeps all data, and is reversed by a (reviewed) `resume`. `gh-bbm-prod-power` can only read, start and stop AKS and Postgres and write tags. It has
 no Terraform state access and no Contributor role.
 
 All environments only accept runs from `main`. `status` uses the plan identity, which is federated
 for `ref:refs/heads/main`, so dispatch it from `main` too.
 
-`deploy.yml` and every mutating env-power job share the concurrency group `env-<env>`. A deploy
-waits for a pause or resume to finish and the other way round. GitHub keeps at most one pending
-run per group, so a newer queued run replaces an older queued one.
+`deploy.yml` and every manual mutating env-power job share the concurrency group `env-<env>`. A
+deploy waits for a pause or resume to finish and the other way round. GitHub keeps at most one
+pending run per group, so a newer queued run replaces an older queued one.
+
+The scheduled jobs (`scheduled-pause`, `scheduled-repause-db`) use their own group,
+`env-power-scheduled-<env>`. A prod run waiting on an unanswered `prod` approval holds `env-prod`,
+and would otherwise block the nightly pause indefinitely. Running outside `env-<env>` is safe for
+Terraform: `env-power.sh` refuses to stop a cluster whose `provisioningState` is not `Succeeded`,
+so it never stops one in the middle of an `up`/`down` apply.
+
+### Image provenance
+
+`deploy.yml` deploys only images built from `main`. Every image pushed by `_build-push.yml` carries
+the OCI labels `org.opencontainers.image.source` and `org.opencontainers.image.revision` (the
+commit SHA). Before touching the cluster, the deploy reads the revision label of the api and web
+images and fails unless that commit is an ancestor of `origin/main`. `integration-azure.yml`,
+which pushes the `sha-<7>` images that staging and prod deploy, also runs only from `main`.
+
+Remaining gap: the ephemeral identity (`gh-bbm-ephemeral`, used by previews and test runs) holds
+`AcrPush`, so a workflow running as it could still overwrite a `sha-*` tag with an image whose
+label claims a `main` commit. Closing that needs a separate main-only push identity for `sha-*`
+tags, which is a future bootstrap change.
 
 ## Schedules
 

@@ -101,6 +101,9 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history + origin/main for the image provenance check.
+          fetch-depth: 0
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -213,6 +216,42 @@ jobs:
             fi
           done
           exit "$missing"
+
+      # Provenance: only images built from a commit on main may deploy. The
+      # api and web images carry org.opencontainers.image.revision (set in
+      # _build-push.yml); it must be an ancestor of origin/main. Images are
+      # pushed with provenance+SBOM, so each tag is an OCI index (image +
+      # attestation manifests); `imagetools inspect --format '{{json .Image}}'`
+      # then returns a per-platform map, so pick linux/amd64.
+      # Remaining gap: the ephemeral identity's AcrPush (PR previews, test
+      # envs) can still overwrite a sha-* tag with an image whose label lies.
+      # A separate main-only push identity is a future bootstrap change
+      # (docs/devops/env-lifecycle.md).
+      - name: Verify image provenance (built from main)
+        if: steps.gate.outputs.go == 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          az acr login --name "$ACR_NAME" --only-show-errors
+          registry="$ACR_NAME.azurecr.io"
+          bad=0
+          for svc in api web; do
+            ref="$registry/bbm/$svc:$TAG"
+            rev=$(docker buildx imagetools inspect "$ref" --format '{{ json .Image }}' |
+              jq -r 'if has("config") then . else (.["linux/amd64"] // empty) end
+                | .config.Labels["org.opencontainers.image.revision"] // empty')
+            if [[ ! "$rev" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::$ref has no valid org.opencontainers.image.revision label (got '$rev')"
+              bad=1
+            elif git merge-base --is-ancestor "$rev" origin/main 2>/dev/null; then
+              echo "ok      $ref (revision $rev is on main)"
+            else
+              echo "::error::$ref was built from $rev, which is not on main"
+              bad=1
+            fi
+          done
+          exit "$bad"
 
       - name: Cluster credentials
         if: steps.gate.outputs.go == 'true'

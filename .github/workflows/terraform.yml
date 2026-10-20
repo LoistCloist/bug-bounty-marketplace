@@ -89,6 +89,17 @@ jobs:
   # environment). It can read global.tfstate and staging/* but NOT prod/*,
   # and cannot take the state lease, hence -lock=false. Prod stacks are
   # planned only via workflow_dispatch in the `prod` environment.
+  #
+  # staging-* PR plans run with -refresh=false: the plan identity is
+  # control-plane Reader only, with no Key Vault data-plane access (the
+  # data stack's azurerm_key_vault_secret reads) and no AKS
+  # listClusterUserCredential (refreshing the compute stack's
+  # azurerm_kubernetes_cluster reads kube_config), so a refresh would
+  # 403. Data sources are still read; all of them here are
+  # control-plane / state reads the identity has. They diff config
+  # against the last-applied state, not live Azure. Fully refreshed plans
+  # run via workflow_dispatch in the staging/prod environments. global
+  # has no data-plane resources, so its PR plan keeps refreshing.
   # ---------------------------------------------------------------------
   plan-pr:
     name: Plan (${{ matrix.id }})
@@ -108,20 +119,25 @@ jobs:
             env: global
             # State blobs that must exist before this stack can plan.
             requires: ''
+            # Extra plan flags (see the job comment for -refresh=false).
+            plan_flags: ''
           - id: staging-data
             stack: data
             env: staging
             requires: 'global.tfstate'
+            plan_flags: '-refresh=false'
           - id: staging-compute
             stack: compute
             env: staging
             requires: 'global.tfstate staging/data.tfstate'
+            plan_flags: '-refresh=false'
     env:
       ARM_CLIENT_ID: ${{ vars.AZURE_PLAN_CLIENT_ID }}
       STACK: ${{ matrix.stack }}
       TF_ENV: ${{ matrix.env }}
       STACK_ID: ${{ matrix.id }}
       REQUIRES: ${{ matrix.requires }}
+      PLAN_FLAGS: ${{ matrix.plan_flags }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -176,8 +192,9 @@ jobs:
         if: steps.deps.outputs.missing == ''
         run: |
           set +e
+          # shellcheck disable=SC2086 # PLAN_FLAGS is a flag list or empty.
           ./infra/terraform/scripts/tf.sh "$STACK" "$TF_ENV" plan \
-            -lock=false -no-color -detailed-exitcode -out=tfplan 2>&1 | tee "$RUNNER_TEMP/plan.txt"
+            -lock=false $PLAN_FLAGS -no-color -detailed-exitcode -out=tfplan 2>&1 | tee "$RUNNER_TEMP/plan.txt"
           code=${PIPESTATUS[0]}
           set -e
           case "$code" in
@@ -205,6 +222,10 @@ jobs:
             else
               echo "**Result:** ${RESULT:-failed} · commit \`${HEAD_SHA:0:7}\` · [run]($RUN_URL)"
               echo
+              if [[ "$PLAN_FLAGS" == *-refresh=false* ]]; then
+                echo "> **Unrefreshed plan** (\`-refresh=false\`): diffs this PR's config against the last-applied state, not live Azure. Drift is not shown. The read-only PR plan identity has no Key Vault data-plane or AKS credential access; run the Terraform workflow_dispatch (\`staging\` environment) for a fully refreshed plan."
+                echo
+              fi
               echo '<details><summary>Plan output</summary>'
               echo
               echo '```'

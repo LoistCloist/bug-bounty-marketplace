@@ -147,6 +147,9 @@ jobs:
           # Only apps/web declares this ARG; the other Dockerfiles ignore it.
           build-args: |
             NEXT_PUBLIC_API_MOCKING=${{ matrix.mocking }}
+          # OCI labels on every image. deploy.yml reads
+          # org.opencontainers.image.revision and refuses to deploy an
+          # image whose revision is not an ancestor of origin/main.
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

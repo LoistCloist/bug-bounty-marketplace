@@ -26,12 +26,9 @@ name: Preview
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
-    # Docs-only PRs get no preview. paths-ignore is evaluated against the
-    # whole PR diff, so the `closed` event of such a PR is skipped too,
-    # which is fine: no preview was ever created for it.
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
+    # No paths/paths-ignore here: a filter could also drop the `closed`
+    # event and leak a preview. Docs-only PRs are skipped inside `gate`
+    # (paths-filter) instead; teardown always runs on `closed`.
 
 # One run per PR at a time, never cancelled mid-flight: cancelling an
 # apply leaves a held state lease, and cancelling a destroy leaks the
@@ -67,6 +64,9 @@ jobs:
   #     subscription not bootstrapped), or
   #   - the PR comes from a fork: forks get no OIDC token and no access
   #     to environment variables, so they could never deploy anyway.
+  # `code` is false for docs-only PRs (every changed file is under docs/
+  # or a *.md), which skips build/deploy; it is not computed on `closed`,
+  # so teardown never depends on it.
   # ---------------------------------------------------------------------
   gate:
     name: Preview gate
@@ -75,7 +75,11 @@ jobs:
       vars.ACR_NAME != '' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    permissions:
+      # paths-filter lists the PR's changed files through the API.
+      pull-requests: read
     outputs:
+      code: ${{ steps.filter.outputs.code }}
       pr: ${{ steps.names.outputs.pr }}
       env_name: ${{ steps.names.outputs.env_name }}
       state_key: ${{ steps.names.outputs.state_key }}
@@ -98,6 +102,20 @@ jobs:
             echo "web_tag=${tag}-mocked"
           } | tee -a "$GITHUB_OUTPUT"
 
+      # Same action as ci.yml. `every`: a file counts only if it matches
+      # all patterns, i.e. it is neither under docs/ nor a Markdown file.
+      - name: Detect non-docs changes
+        id: filter
+        if: github.event.action != 'closed'
+        uses: dorny/paths-filter@v3
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+
   # ---------------------------------------------------------------------
   # Build and push api + web tagged `pr-<n>-sha-<7>`, plus the mocked
   # web variant `pr-<n>-sha-<7>-mocked` (the one actually deployed; the
@@ -109,7 +127,7 @@ jobs:
   build:
     name: Build images
     needs: gate
-    if: github.event.action != 'closed'
+    if: github.event.action != 'closed' && needs.gate.outputs.code == 'true'
     permissions:
       contents: read
       id-token: write
@@ -129,7 +147,7 @@ jobs:
   deploy:
     name: Deploy preview
     needs: [gate, build]
-    if: github.event.action != 'closed'
+    if: github.event.action != 'closed' && needs.gate.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -373,7 +391,10 @@ jobs:
   comment:
     name: Preview comment
     needs: [gate, build, deploy, teardown]
-    if: always() && needs.gate.result == 'success'
+    # Docs-only pushes build nothing, so they get no comment.
+    if: >-
+      always() && needs.gate.result == 'success' &&
+      (github.event.action == 'closed' || needs.gate.outputs.code == 'true')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write

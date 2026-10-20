@@ -18,7 +18,11 @@ name: Env power
 #   11:00 Sunday    retry auto-pause after the AKS maintenance window (Sun 06:00-10:00),
 #                   which can block a stop
 #
-# Every mutating job uses the concurrency group env-<env>, shared with deploy.yml.
+# Every manual mutating job uses the concurrency group env-<env>, shared with
+# deploy.yml. The scheduled jobs use env-power-scheduled-<env> instead, so a
+# prod run parked on an unanswered `prod` approval (holding env-prod) cannot
+# block the nightly pause. env-power.sh refuses to stop a cluster whose
+# provisioningState is not Succeeded, so it never stops one mid-apply.
 
 on:
   workflow_dispatch:
@@ -79,7 +83,9 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Status
-        run: infra/terraform/scripts/env-power.sh "${{ inputs.env }}" status
+        env:
+          ENV_NAME: ${{ inputs.env }}
+        run: infra/terraform/scripts/env-power.sh "$ENV_NAME" status
 
   # ---------------------------------------------------------------------
   # pause / resume. prod pause uses the reviewer-free prod-power env
@@ -119,9 +125,13 @@ jobs:
 
       - name: ${{ inputs.action }}
         id: power
+        env:
+          ENV_NAME: ${{ inputs.env }}
+          ACTION: ${{ inputs.action }}
+          INCLUDE_DB: ${{ inputs.include_db }}
         run: |
-          infra/terraform/scripts/env-power.sh "${{ inputs.env }}" "${{ inputs.action }}" \
-            --include-db "${{ inputs.include_db }}"
+          infra/terraform/scripts/env-power.sh "$ENV_NAME" "$ACTION" \
+            --include-db "$INCLUDE_DB"
 
       - name: Wait for the ingress
         if: inputs.action == 'resume'
@@ -350,8 +360,9 @@ jobs:
       matrix:
         env: [staging, prod]
     environment: ${{ matrix.env == 'prod' && 'prod-power' || 'staging' }}
+    # Own group (not env-<env>): see the header comment.
     concurrency:
-      group: env-${{ matrix.env }}
+      group: env-power-scheduled-${{ matrix.env }}
       cancel-in-progress: false
     timeout-minutes: 45
     steps:
@@ -359,9 +370,10 @@ jobs:
         id: cfg
         env:
           CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ENV_NAME: ${{ matrix.env }}
         run: |
           if [[ -z "$CLIENT_ID" ]]; then
-            echo "::notice::No AZURE_CLIENT_ID for this environment; skipping ${{ matrix.env }}."
+            echo "::notice::No AZURE_CLIENT_ID for this environment; skipping $ENV_NAME."
             echo "ok=false" >>"$GITHUB_OUTPUT"
           else
             echo "ok=true" >>"$GITHUB_OUTPUT"
@@ -381,15 +393,17 @@ jobs:
 
       - name: Auto-pause
         if: steps.cfg.outputs.ok == 'true'
+        env:
+          ENV_NAME: ${{ matrix.env }}
         run: |
           set +e
-          infra/terraform/scripts/env-power.sh "${{ matrix.env }}" auto-pause --include-db true
+          infra/terraform/scripts/env-power.sh "$ENV_NAME" auto-pause --include-db true
           rc=$?
           set -e
           if [[ $rc -eq 3 ]]; then
             # Cluster busy (usually the Sunday maintenance window). The Sunday
             # 11:00 run or the next night retries.
-            echo "::warning::${{ matrix.env }} could not be paused now (cluster busy); it will be retried."
+            echo "::warning::$ENV_NAME could not be paused now (cluster busy); it will be retried."
             exit 0
           fi
           exit "$rc"
@@ -405,8 +419,9 @@ jobs:
       matrix:
         env: [staging, prod]
     environment: ${{ matrix.env == 'prod' && 'prod-power' || 'staging' }}
+    # Own group (not env-<env>): see the header comment.
     concurrency:
-      group: env-${{ matrix.env }}
+      group: env-power-scheduled-${{ matrix.env }}
       cancel-in-progress: false
     timeout-minutes: 30
     steps:
@@ -414,9 +429,10 @@ jobs:
         id: cfg
         env:
           CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          ENV_NAME: ${{ matrix.env }}
         run: |
           if [[ -z "$CLIENT_ID" ]]; then
-            echo "::notice::No AZURE_CLIENT_ID for this environment; skipping ${{ matrix.env }}."
+            echo "::notice::No AZURE_CLIENT_ID for this environment; skipping $ENV_NAME."
             echo "ok=false" >>"$GITHUB_OUTPUT"
           else
             echo "ok=true" >>"$GITHUB_OUTPUT"
@@ -436,4 +452,6 @@ jobs:
 
       - name: Re-pause Postgres if Azure auto-started it
         if: steps.cfg.outputs.ok == 'true'
-        run: infra/terraform/scripts/env-power.sh "${{ matrix.env }}" repause-db
+        env:
+          ENV_NAME: ${{ matrix.env }}
+        run: infra/terraform/scripts/env-power.sh "$ENV_NAME" repause-db

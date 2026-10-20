@@ -16,7 +16,8 @@ name: Infra janitor
 # `infra-global` (gh-bbm-global, Contributor on the shared RG). That
 # environment has a required reviewer: the weekly purge WAITS FOR
 # APPROVAL (and times out unapproved after 30 days, which is harmless:
-# next week's run tries again). The sweep never waits.
+# next week's run tries again). The sweep never waits: it has its own
+# job-level concurrency group, separate from the purge's.
 #
 # ACR purge guard: the purge (>30d, keep 10 newest) has no keep list,
 # so a tag still running on staging/prod (data RG tag
@@ -42,9 +43,9 @@ on:
         type: boolean
         default: false
 
-concurrency:
-  group: infra-janitor
-  cancel-in-progress: false
+# No workflow-level concurrency: that would queue the 6h sweep behind a
+# weekly run whose acr-purge is waiting for infra-global approval. The
+# sweep and the purge each serialize in their own job-level group.
 
 permissions:
   contents: read
@@ -149,6 +150,9 @@ jobs:
     needs: gate
     runs-on: ubuntu-latest
     environment: test
+    concurrency:
+      group: infra-janitor-sweep
+      cancel-in-progress: false
     timeout-minutes: 30
     permissions:
       contents: read
@@ -195,6 +199,9 @@ jobs:
     if: ${{ always() && needs.gate.outputs.acr_purge == 'true' && needs.protected-tags.result == 'success' }}
     runs-on: ubuntu-latest
     environment: infra-global
+    concurrency:
+      group: infra-janitor-acr-purge
+      cancel-in-progress: false
     timeout-minutes: 30
     permissions:
       contents: read

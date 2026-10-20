@@ -117,9 +117,17 @@ resource "azurerm_resource_group" "env_data" {
 
   lifecycle {
     ignore_changes = [
+      # Keep in sync with docs/devops/env-lifecycle.md ("Terraform ignores
+      # these tags").
       tags["power-state"],
-      tags["bbm-last-deployed-tag"],
       tags["auto-pause"],
+      tags["db-paused"],
+      tags["bbm-last-deployed-tag"],
+      tags["paused-at"],
+      tags["resumed-at"],
+      tags["down-at"],
+      tags["up-at"],
+      tags["deployed-at"],
     ]
   }
 }
