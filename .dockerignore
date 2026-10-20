@@ -12,6 +12,7 @@
 .git
 .github
 .ci
+.worktrees
 docs
 uml
 infra

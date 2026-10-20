@@ -5,3 +5,6 @@ deployments/*.json
 **/.git
 Dockerfile
 .dockerignore
+.env
+.env.*
+!.env.example

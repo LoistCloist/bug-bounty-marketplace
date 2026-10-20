@@ -12,3 +12,5 @@ scripts
 .gitignore
 .dockerignore
 Dockerfile
+.env
+.env.*
