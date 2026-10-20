@@ -23,40 +23,77 @@ flowchart TB
     APIClient -.imports types.-> Zod
     Handlers -.imports types.-> Zod
 
-    subgraph RealAPI["apps/api (Fastify) - future real backend"]
-        Health["GET /health (implemented)"]
-        FutureRoutes["Contract/Finding/Dispute routes<br/>(not yet built - mocked by MSW today)"]
+    subgraph RealAPI["apps/api (Fastify) - real backend, partly built"]
+        Health["GET /health, POST /api/contracts,<br/>GET /api/contracts/:id + Postgres (implemented)"]
+        FutureRoutes["Finding/PoC/Dispute routes<br/>(not yet built - mocked by MSW today)"]
     end
     FutureRoutes -.will replace.-> Handlers
     FutureRoutes -.imports types.-> Zod
 
-    subgraph Workers["workers/ - future non-TS services"]
-        Analysis["workers/analysis (Python)<br/>Slither static analysis + LLM explanation"]
+    subgraph Workers["workers/ - non-TS services"]
+        Analysis["workers/analysis (Python)<br/>container + /health built,<br/>Slither + LLM explanation planned"]
         OtherWorker["future Rust service"]
     end
     Analysis -. datamodel-code-generator .-> JSONSchema
     OtherWorker -. typify .-> JSONSchema
     RealAPI --> Analysis
 
-    subgraph Contracts["contracts/ (Foundry) - future on-chain"]
-        Escrow["Bounty escrow contract"]
+    subgraph Contracts["contracts/ (Foundry) - on-chain"]
+        Escrow["BountyEscrow, AuditorStaking, DisputeResolution<br/>anvil locally, Sepolia via contracts-deploy.yml"]
         PoCTests["Submitted PoC .t.sol tests"]
         Sandbox["Sandbox re-run environment"]
     end
     RealAPI -.will call.-> Escrow
     PoCTests --> Sandbox
 
-    subgraph CI["CI/CD - .github/workflows/ci.yml"]
+    subgraph Compose["Container stack - docker-compose.yml (local + CI)"]
+        CWeb["web :3000 (bbm/web)"]
+        CApi["api :3001 (bbm/api)"]
+        CDb["db :5432 (postgres:16-alpine)"]
+        CAnalysis["analysis :8000 (bbm/analysis)"]
+        CAnvil["anvil :8545 + contracts-deploy (bbm/contracts)"]
+        CWeb -- "/api proxy" --> CApi --> CDb
+    end
+
+    subgraph CI["CI - .github/workflows/ci.yml (no Azure credentials)"]
         PathFilter["changes (dorny/paths-filter)"]
         WebJob["web: lint/typecheck/test/build"]
         SharedJob["shared: typecheck/test + gen:schema staleness check"]
-        ApiJob["api: lint/typecheck/test"]
-        ContractsJob["contracts: forge build/test + Slither"]
-        Gate["ci-ok (required status check)"]
-        PathFilter --> WebJob & SharedJob & ApiJob & ContractsJob --> Gate
+        ApiJob["api: lint/typecheck/test/build + Postgres service"]
+        ContractsJob["contracts: forge build/test, gas snapshot, Slither"]
+        AnalysisJob["analysis: ruff + pytest + model drift"]
+        ContainersJob["containers: hadolint, bake images, compose up,<br/>smoke/integration/regression/e2e"]
+        TfJob["terraform-static: fmt/validate/tflint/terraform test"]
+        HelmJob["helm: lint, kubeconform, ct lint"]
+        WfJob["workflows: actionlint"]
+        Gate["CI OK (required status check)"]
+        PathFilter --> WebJob & SharedJob & ApiJob & ContractsJob & AnalysisJob & ContainersJob & TfJob & HelmJob & WfJob --> Gate
+    end
+    ContainersJob -. runs .-> Compose
+
+    subgraph Azure["Azure deploy targets - infra/terraform + deploy/helm/bbm (defined, applied after bootstrap)"]
+        ACR["ACR bbm/* images (sha-7, pr-N-sha-7)"]
+        ACATest["ACA pipeline test env<br/>integration-azure.yml: build, provision, test, destroy"]
+        ACAPreview["ACA PR preview env<br/>preview.yml: per PR, destroyed on close"]
+        AKSStaging["AKS staging (Helm chart bbm)<br/>deploy.yml + env-power.yml"]
+        AKSProd["AKS prod (Helm chart bbm)<br/>deploy.yml, reviewer-gated"]
+        ACR --> ACATest & ACAPreview & AKSStaging & AKSProd
+    end
+    Compose -. "same Dockerfiles, pushed by _build-push.yml over OIDC" .-> ACR
+    Analysis -. "KEDA queue scaling (planned)" .-> AKSStaging
+    Sandbox -. "Kata sandbox pool (planned)" .-> AKSProd
+
+    subgraph Legend["Legend"]
+        LCur["built and running in CI"]
+        LBuilt["built as IaC / workflows, needs Azure bootstrap"]
+        LFut["planned"]
     end
 
     classDef current fill:#2563eb,stroke:#1e3a8a,color:#fff;
+    classDef built fill:#0d9488,stroke:#134e4a,color:#fff;
     classDef future fill:#9ca3af,stroke:#4b5563,color:#1f2937,stroke-dasharray: 5 3;
-    class UI,RQ,APIClient,MSWWorker,Handlers,MockDB,Zod,JSONSchema,Health,PathFilter,WebJob,SharedJob,ApiJob,ContractsJob,Gate current;
-    class FutureRoutes,Analysis,OtherWorker,Escrow,PoCTests,Sandbox future;
+    class UI,RQ,APIClient,MSWWorker,Handlers,MockDB,Zod,JSONSchema,Health,PathFilter,WebJob,SharedJob,ApiJob,ContractsJob,AnalysisJob,ContainersJob,TfJob,HelmJob,WfJob,Gate,CWeb,CApi,CDb,CAnalysis,CAnvil,Escrow current;
+    class ACR,ACATest,ACAPreview,AKSStaging,AKSProd,LBuilt built;
+    class LCur current;
+    class LFut future;
+    class FutureRoutes,Analysis,OtherWorker,PoCTests,Sandbox future;

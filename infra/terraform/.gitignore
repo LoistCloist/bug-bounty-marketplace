@@ -1,0 +1,24 @@
+# Provider/module caches
+**/.terraform/*
+
+# Local state (bootstrap before -migrate-state, or accidental local runs)
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Saved plans may contain secrets
+*.tfplan
+tfplan
+*.plan
+
+# Crash logs and CLI overrides
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# NOTE: .terraform.lock.hcl IS committed for stacks (pins provider hashes).

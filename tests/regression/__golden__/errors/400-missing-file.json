@@ -1,0 +1,6 @@
+{
+  "body": {
+    "error": "file is required"
+  },
+  "status": 400
+}

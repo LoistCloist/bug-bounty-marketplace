@@ -1,0 +1,24 @@
+{
+  "name": "@bbm/system-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p e2e",
+    "test:integration": "vitest run --project integration",
+    "test:regression": "vitest run --project regression",
+    "test:smoke": "vitest run --project smoke",
+    "e2e": "playwright test -c e2e/playwright.config.ts"
+  },
+  "dependencies": {
+    "@bbm/shared": "workspace:^",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.5"
+  }
+}

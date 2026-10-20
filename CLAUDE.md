@@ -10,30 +10,55 @@ AI-assisted smart contract security and bug-bounty marketplace. See
 
 ## Commands
 
-Most of these are stubs until the referenced branch lands — that's expected
-at this stage of the milestone.
-
 ```sh
 pnpm install              # install all workspace deps
 
 pnpm -r lint               # fan out `lint` to every package that has it
 pnpm -r typecheck          # fan out `typecheck`
-pnpm -r test               # fan out `test`
+pnpm -r test               # fan out `test` (unit tests only, no stack needed)
 pnpm -r build              # fan out `build`
 
 pnpm --filter @bbm/api dev        # run the Fastify API with hot reload
 pnpm --filter @bbm/api typecheck
-pnpm --filter @bbm/api test
+pnpm --filter @bbm/api test       # pg tests run only with DATABASE_URL set
 pnpm --filter @bbm/api build
 
 pnpm --filter @bbm/shared typecheck
+pnpm --filter @bbm/shared gen:schema   # regenerate packages/shared/schema/*.json; commit it
 
-# Once apps/web exists (feat/web-shell-mocks):
-NEXT_PUBLIC_API_MOCKING=enabled pnpm dev
+NEXT_PUBLIC_API_MOCKING=enabled pnpm dev   # web app against the MSW mocks
 
-# Contracts (requires Foundry, see docs/contracts/foundry-setup.md):
+# Full local stack (docker compose; see README "Running the stack"):
+pnpm stack:up                  # build + start db, api, web, analysis, anvil
+pnpm stack:deploy-contracts    # deploy contracts to the local anvil
+pnpm stack:ci                  # CI variant: prebuilt images, --no-build
+pnpm stack:down                # stop + remove volumes
+
+# System tests against a running stack (see tests/README.md):
+pnpm test:integration
+pnpm test:regression           # -u via `pnpm --filter @bbm/system-tests test:regression -u`
+pnpm test:smoke
+pnpm test:e2e
+
+# workers/analysis (Python, uv):
+cd workers/analysis && uv sync
+uv run ruff check . && uv run ruff format --check .
+uv run pytest -q
+uv run scripts/gen-types.sh    # regenerate pydantic models from shared schema; commit it
+
+# Contracts (Foundry v1.3.5, see docs/contracts/foundry-setup.md):
 cd contracts && forge build && forge test
+forge snapshot                 # rewrite .gas-snapshot after gas changes; CI runs --check
+
+# Infra (no Azure credentials needed):
+infra/terraform/scripts/ci-static.sh   # fmt, validate, terraform test, tflint, shellcheck
+helm lint --strict deploy/helm/bbm -f deploy/helm/bbm/values-staging.yaml --set global.image.tag=test
+helm template bbm deploy/helm/bbm -n bbm -f deploy/helm/bbm/values-prod.yaml --set global.image.tag=test
+docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.3   # lint workflows
 ```
+
+`@bbm/system-tests` (`tests/`) has **no `test` script on purpose**, so
+`pnpm -r test` never needs a running stack. Run its tiers explicitly.
 
 ## Conventions
 
@@ -41,37 +66,67 @@ cd contracts && forge build && forge test
   `tsconfig.base.json` (`strict: true`, `esModuleInterop`, `skipLibCheck`,
   `forceConsistentCasingInFileNames`, `target: ES2022`,
   `moduleResolution: bundler` by default — individual packages may override
-  module resolution if their runtime requires it, e.g. `apps/api` uses
-  `NodeNext`).
+  module resolution if their runtime requires it. `apps/api` also uses
+  `bundler` resolution: `tsc` only typechecks it, and `apps/api/build.mjs`
+  bundles it with esbuild into `dist/` for `node dist/index.js`).
 - **Conventional Commits** for every commit (`feat:`, `fix:`, `chore:`,
   `docs:`, `refactor:`, `test:`, etc.), small and scoped.
-- **pnpm workspaces** cover `apps/*` and `packages/*` only. `workers/*` is
-  deliberately excluded — it holds non-TypeScript services (Python/Rust) with
-  their own toolchains, not pnpm packages.
+- **pnpm workspaces** cover `apps/*`, `packages/*` and `tests` (the
+  `@bbm/system-tests` package). `workers/*` is deliberately excluded — it
+  holds non-TypeScript services (Python/Rust) with their own toolchains, not
+  pnpm packages.
 - Run the relevant `lint` / `typecheck` / `test` / `build` for whatever you
-  touched before every commit. It's fine if a package has nothing to run yet
-  early in the milestone.
+  touched before every commit (for infra: `ci-static.sh`, `helm lint`,
+  actionlint).
 
 ## Git workflow
 
-- `feat/m2-foundation` is the integration branch for this milestone, cut from
-  `main`.
-- Each sub-branch (like this one, `chore/monorepo-scaffold`) is cut from the
-  **latest** `feat/m2-foundation` — pull before cutting.
+- Each milestone has an integration branch cut from `main`: currently
+  `feat/m3-devops` (DevOps milestone); previously `feat/m2-foundation`
+  (M2 foundation).
+- Each sub-branch (e.g. `ci/azure-workflows`, `docs/devops`) is cut from the
+  **latest** integration branch — pull before cutting.
 - Commit in small Conventional Commits. Lint/typecheck/test/build whatever
   you touched before each commit; only commit when it's green.
-- Open a PR into `feat/m2-foundation` with `gh pr create`. Wait for CI, address
-  reviewer findings.
+- Open a PR into the integration branch with `gh pr create`. Wait for CI,
+  address reviewer findings.
 - Before merging, **always run a fresh reviewer sub-agent on the PR diff**
   (not reused context) checking for: correctness and test coverage, schema
   consistency across packages, accidental real network calls (should be
   mocked), and scope creep beyond the sub-branch's stated purpose.
 - Merge with `gh pr merge --merge --delete-branch` — a real merge commit, not
-  a squash — so sub-branch history is preserved on `feat/m2-foundation`.
-- Pull `feat/m2-foundation` before cutting the next sub-branch.
+  a squash — so sub-branch history is preserved on the integration branch.
+- Pull the integration branch before cutting the next sub-branch.
 - When the whole milestone is done, open the final PR
-  `feat/m2-foundation` → `main`, but **do not merge it** — it's left for
+  `<integration branch>` → `main`, but **do not merge it** — it's left for
   team review.
+
+## Infra conventions
+
+- **Terraform layout** (`infra/terraform/`): reusable `modules/`, one
+  `stacks/<stack>` per layer (`bootstrap`, `global`, `data`, `compute`,
+  `aca-ephemeral`), per-env inputs in `envs/<env>/`. Names and tags come from
+  `modules/naming`; bootstrap owns every resource group. Interfaces between
+  stacks, Helm and workflows are pinned in
+  `docs/adr/0001-azure-environment-topology.md` — change them there first.
+- **Run stacks through `scripts/tf.sh <stack> <env> <cmd>`**, which picks
+  the var-file, backend config and state key (`TFSTATE_RG` /
+  `TFSTATE_ACCOUNT` override the committed backend files).
+- **No externally supplied secrets in Terraform state.** Terraform creates
+  vaults; values like `llm-api-key`, the Sepolia RPC URL and deployer key are
+  set with `az keyvault secret set` (see `docs/devops/azure-bootstrap.md`).
+- **OIDC only.** Workflows authenticate to Azure with GitHub federated
+  credentials per GitHub Environment; never add cloud secrets to GitHub.
+- **Azure workflows are gated on repo vars** (`vars.AZURE_SUBSCRIPTION_ID`,
+  `vars.ACR_NAME`, ...) and skip green until bootstrap has set them.
+- **`ci.yml` stays Azure-free**, so `CI OK` never depends on cloud
+  credentials, quota or uptime. Anything that needs Azure goes in its own
+  workflow.
+- **Helm values layering:** `values.yaml` (safe, kind-friendly defaults) →
+  `values-<env>.yaml` (staging/prod switches and sizes) → generated
+  `values-infra.yaml` (`tf.sh compute <env> output -raw helm_values`, never
+  committed) → `--set global.image.tag=sha-<7>`. Env files never hardcode
+  infra values.
 
 ## Sub-agent rules
 
@@ -83,7 +138,7 @@ cd contracts && forge build && forge test
 - **Flow branches (developer / auditor / arbiter) run in parallel**, once the
   foundation is in place. Each flow gets its own git worktree and its own
   sub-agent, split by mock handler area:
-  - `apps/web/mocks/handlers/{developer,auditor,arbiter}.ts` plus a shared
+  - `apps/web/src/mocks/handlers/{developer,auditor,arbiter}.ts` plus a shared
     `index.ts` that composes them.
   - The mock DB is split the same way (per-flow data/fixtures module).
   - Each flow agent may only touch files and routes under its own area. If a
