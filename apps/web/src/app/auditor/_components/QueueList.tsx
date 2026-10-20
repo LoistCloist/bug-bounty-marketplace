@@ -15,6 +15,7 @@ const SORT_LABELS: Record<SortOption, string> = {
 
 export function QueueList({ auditorId }: { auditorId: string }) {
   const [sort, setSort] = useState<SortOption>("newest");
+  const [search, setSearch] = useState("");
   const [claimError, setClaimError] = useState<string | null>(null);
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -22,6 +23,7 @@ export function QueueList({ auditorId }: { auditorId: string }) {
   const queueQuery = useQuery({
     queryKey: ["auditor-queue", sort],
     queryFn: () => auditorApi.listQueue({ sort }),
+    refetchInterval: 3_000,
   });
 
   const claimMutation = useMutation({
@@ -29,6 +31,7 @@ export function QueueList({ auditorId }: { auditorId: string }) {
     onSuccess: (contract) => {
       setClaimError(null);
       void queryClient.invalidateQueries({ queryKey: ["auditor-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["auditor-profile"] });
       router.push(`/auditor/contracts/${contract.id}`);
     },
     onError: (err) => {
@@ -43,7 +46,7 @@ export function QueueList({ auditorId }: { auditorId: string }) {
 
   return (
     <section>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap gap-3 items-center justify-between">
         <h2 className="text-xl font-semibold text-white">Open queue</h2>
         <div className="flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900 p-1">
           {(Object.keys(SORT_LABELS) as SortOption[]).map((option) => (
@@ -63,6 +66,14 @@ export function QueueList({ auditorId }: { auditorId: string }) {
           ))}
         </div>
       </div>
+      <label className="search-field mt-4">
+        <input
+          aria-label="Search audit queue"
+          placeholder="Search open contracts…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </label>
 
       {claimError && <p className="mt-3 text-sm text-red-400">{claimError}</p>}
 
@@ -74,34 +85,41 @@ export function QueueList({ auditorId }: { auditorId: string }) {
       )}
 
       <ul className="mt-4 flex flex-col gap-3">
-        {queueQuery.data?.map((item: QueueItem) => (
-          <li
-            key={item.id}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900 p-4"
-          >
-            <div>
-              <p className="font-medium text-white">{item.filename}</p>
-              <p className="text-sm text-slate-400">
-                {item.bounty.amount} {item.bounty.currency} - deadline{" "}
-                {new Date(item.deadline).toLocaleDateString()}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setClaimError(null);
-                claimMutation.mutate(item.id);
-              }}
-              disabled={claimMutation.isPending}
-              className="rounded bg-emerald-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+        {queueQuery.data
+          ?.filter((item) => item.filename.toLowerCase().includes(search.toLowerCase()))
+          .map((item: QueueItem) => (
+            <li
+              key={item.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900 p-4"
             >
-              {claimMutation.isPending && claimMutation.variables === item.id
-                ? "Claiming..."
-                : "Claim"}
-            </button>
-          </li>
-        ))}
+              <div>
+                <p className="font-medium text-white">{item.filename}</p>
+                <p className="text-sm text-slate-400">
+                  {item.bounty.amount} {item.bounty.currency} - deadline{" "}
+                  {new Date(item.deadline).toLocaleDateString()}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setClaimError(null);
+                  claimMutation.mutate(item.id);
+                }}
+                disabled={claimMutation.isPending}
+                className="rounded bg-emerald-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+              >
+                {claimMutation.isPending && claimMutation.variables === item.id
+                  ? "Claiming..."
+                  : "Claim"}
+              </button>
+            </li>
+          ))}
       </ul>
+      {search &&
+        queueQuery.data &&
+        !queueQuery.data.some((item) =>
+          item.filename.toLowerCase().includes(search.toLowerCase()),
+        ) && <p className="empty-state">No contracts match your search.</p>}
     </section>
   );
 }

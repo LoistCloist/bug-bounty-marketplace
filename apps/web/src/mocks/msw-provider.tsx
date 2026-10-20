@@ -13,6 +13,7 @@ import { useEffect, useState, type ReactNode } from "react";
  */
 export function MswProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -23,13 +24,30 @@ export function MswProvider({ children }: { children: ReactNode }) {
       })
       .catch((err: unknown) => {
         console.error("[mocks] failed to start MSW worker:", err);
-        if (!cancelled) setReady(true);
+        if (!cancelled) setFailed(true);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  if (!ready) return null;
+  if (failed)
+    return (
+      <div className="empty-state" role="alert">
+        <h1>Could not start the demo</h1>
+        <p>
+          The mock API needs a working service worker. Use localhost or HTTPS and reload to retry.
+        </p>
+        <button className="button-primary" onClick={() => window.location.reload()}>
+          Reload demo
+        </button>
+      </div>
+    );
+  if (!ready)
+    return (
+      <div className="empty-state" role="status">
+        Preparing your security workspace…
+      </div>
+    );
   return <>{children}</>;
 }

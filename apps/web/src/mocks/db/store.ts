@@ -14,6 +14,7 @@ import type {
  * a given slice, not about isolating the data itself.
  */
 export interface MockDb {
+  claims: Record<string, { auditorId: string; expiresAt: string }>;
   contracts: Contract[];
   bounties: Bounty[];
   findings: Finding[];
@@ -23,6 +24,7 @@ export interface MockDb {
 }
 
 export const db: MockDb = {
+  claims: {},
   contracts: [],
   bounties: [],
   findings: [],

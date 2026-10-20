@@ -7,37 +7,36 @@ import { ANALYSIS_DELAY_MS, CHALLENGE_WINDOW_MS } from "./timing";
 import { MockApiError } from "./errors";
 import { SEED_AUDITOR_ID } from "./auditors";
 
-const DETECTOR_POOL: Array<{ severity: FindingSeverity; detector: string; explanation: string }> =
-  [
-    {
-      severity: "Critical",
-      detector: "reentrancy-eth",
-      explanation:
-        "An external call is made before the contract's own state is updated, allowing a " +
-        "malicious callee to re-enter and drain ETH before balances are settled.",
-    },
-    {
-      severity: "High",
-      detector: "unprotected-selfdestruct",
-      explanation:
-        "A function that can call selfdestruct is reachable without an access-control check, " +
-        "letting any caller destroy the contract and sweep its balance.",
-    },
-    {
-      severity: "Medium",
-      detector: "unchecked-transfer",
-      explanation:
-        "The return value of an ERC-20 transfer/transferFrom call is not checked, so a " +
-        "silently-failing token transfer would be treated as successful.",
-    },
-    {
-      severity: "Low",
-      detector: "unused-return",
-      explanation:
-        "A low-level call's return value is discarded, hiding a potential failure from " +
-        "downstream logic.",
-    },
-  ];
+const DETECTOR_POOL: Array<{ severity: FindingSeverity; detector: string; explanation: string }> = [
+  {
+    severity: "Critical",
+    detector: "reentrancy-eth",
+    explanation:
+      "An external call is made before the contract's own state is updated, allowing a " +
+      "malicious callee to re-enter and drain ETH before balances are settled.",
+  },
+  {
+    severity: "High",
+    detector: "unprotected-selfdestruct",
+    explanation:
+      "A function that can call selfdestruct is reachable without an access-control check, " +
+      "letting any caller destroy the contract and sweep its balance.",
+  },
+  {
+    severity: "Medium",
+    detector: "unchecked-transfer",
+    explanation:
+      "The return value of an ERC-20 transfer/transferFrom call is not checked, so a " +
+      "silently-failing token transfer would be treated as successful.",
+  },
+  {
+    severity: "Low",
+    detector: "unused-return",
+    explanation:
+      "A low-level call's return value is discarded, hiding a potential failure from " +
+      "downstream logic.",
+  },
+];
 
 function timestamp(offsetMs: number): string {
   return new Date(Date.now() + offsetMs).toISOString();
@@ -66,6 +65,13 @@ function newFindingShell(contractId: string, pick: (typeof DETECTOR_POOL)[number
 export function generateFindingsForContract(contractId: string, count = 2): Finding[] {
   const picks = DETECTOR_POOL.slice(0, count);
   const findings = picks.map((pick) => newFindingShell(contractId, pick));
+  const claim = db.claims[contractId];
+  if (claim) {
+    for (const finding of findings) {
+      finding.claimedByAuditorId = claim.auditorId;
+      finding.claimExpiresAt = claim.expiresAt;
+    }
+  }
   db.findings.push(...findings);
   return findings;
 }
@@ -327,4 +333,9 @@ export function seedContractsArea(): void {
     { status: "Disputed", changedAt: iso(-10_000) },
   );
   db.findings.push(findingDisputed);
+  // Keep the open seed usable: analysis must complete just as it does
+  // for a new upload. Schedule after all seeds so fixture IDs stay stable.
+  scheduleOnce(`analysis:${contract1Id}`, ANALYSIS_DELAY_MS, () => {
+    generateFindingsForContract(contract1Id);
+  });
 }

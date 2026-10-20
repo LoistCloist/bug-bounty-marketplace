@@ -30,6 +30,7 @@ export default function ArbiterPage() {
   const disputesQuery = useQuery({
     queryKey,
     queryFn: () => arbiterApi.listDisputes(filter),
+    refetchInterval: 3_000,
   });
 
   const ruleMutation = useMutation({
@@ -50,8 +51,13 @@ export default function ArbiterPage() {
   });
 
   function handleRule(disputeId: string, ruling: "ForAuditor" | "AgainstAuditor") {
-    const verb = ruling === "ForAuditor" ? "FOR the auditor (pays out)" : "AGAINST the auditor (rejects + slashes stake)";
-    const confirmed = window.confirm(`Rule ${verb} on dispute ${disputeId}? This cannot be undone.`);
+    const verb =
+      ruling === "ForAuditor"
+        ? "FOR the auditor (pays out)"
+        : "AGAINST the auditor (rejects + slashes stake)";
+    const confirmed = window.confirm(
+      `Rule ${verb} on dispute ${disputeId}? This cannot be undone.`,
+    );
     if (!confirmed) return;
     ruleMutation.mutate({ disputeId, ruling });
   }
@@ -60,6 +66,7 @@ export default function ArbiterPage() {
 
   return (
     <div>
+      <p className="eyebrow">ARBITER WORKSPACE</p>
       <h1 className="text-2xl font-semibold text-white">Open disputes</h1>
       <p className="mt-2 text-slate-400">
         Review the developer&apos;s challenge against the auditor&apos;s original finding and
@@ -93,15 +100,11 @@ export default function ArbiterPage() {
       <div className="mt-6 space-y-4">
         {disputesQuery.isLoading ? <p className="text-slate-400">Loading disputes…</p> : null}
 
-        {disputesQuery.isError ? (
-          <p className="text-red-400">Failed to load disputes.</p>
-        ) : null}
+        {disputesQuery.isError ? <p className="text-red-400">Failed to load disputes.</p> : null}
 
         {!disputesQuery.isLoading && !disputesQuery.isError && disputes.length === 0 ? (
           <p className="text-slate-400">
-            {tab === "Pending"
-              ? "No open disputes right now."
-              : "No disputes match this filter."}
+            {tab === "Pending" ? "No open disputes right now." : "No disputes match this filter."}
           </p>
         ) : null}
 
