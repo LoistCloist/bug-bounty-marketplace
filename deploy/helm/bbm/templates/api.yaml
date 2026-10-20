@@ -1,0 +1,193 @@
+{{- $v := .Values.api -}}
+{{- $name := include "bbm.componentName" (dict "root" $ "component" "api") -}}
+{{- $csi := include "bbm.csi" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  {{- if not $v.hpa.enabled }}
+  replicas: {{ $v.replicaCount }}
+  {{- end }}
+  {{- /*
+  With a single replica, a surge pod would get its own empty upload
+  emptyDir (SOURCE_STORAGE_DIR) while the old pod still serves, and the HPA
+  max of 1 would be exceeded during rollouts. Default to replace-in-place
+  (maxSurge 0 / maxUnavailable 1) whenever at most one api replica can run;
+  api.strategy overrides this verbatim.
+  */}}
+  {{- $maxReplicas := ternary $v.hpa.maxReplicas $v.replicaCount $v.hpa.enabled | int }}
+  {{- if $v.strategy }}
+  strategy:
+    {{- toYaml $v.strategy | nindent 4 }}
+  {{- else if le $maxReplicas 1 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "bbm.selectorLabels" (dict "root" $ "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bbm.labels" (dict "root" $ "component" "api") | nindent 8 }}
+        {{- if include "bbm.useWorkloadIdentity" (dict "root" $ "clientId" .Values.azure.apiClientId) }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+        {{- with $v.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "bbm.checksums" . | nindent 8 }}
+        {{- with $v.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      {{- with (include "bbm.imagePullSecrets" . | trim) }}{{ . | nindent 6 }}{{- end }}
+      {{- include "bbm.podSecurityContext" (dict "uid" $v.runAsUser "gid" $v.runAsGroup) | nindent 6 }}
+      {{- with (include "bbm.scheduling" (dict "root" $ "values" $v "component" "api") | trim) }}{{ . | nindent 6 }}{{- end }}
+      containers:
+        - name: api
+          image: {{ include "bbm.image" (dict "root" $ "image" $v.image) }}
+          imagePullPolicy: {{ include "bbm.imagePullPolicy" (dict "root" $ "image" $v.image) }}
+          ports:
+            - name: http
+              containerPort: {{ $v.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "bbm.fullname" . }}-config
+          env:
+            - name: PORT
+              value: {{ $v.port | quote }}
+            - name: MIGRATE_ON_BOOT
+              value: {{ ternary "false" (toString $v.migrateOnBoot) .Values.migrations.enabled | quote }}
+            - name: PG_POOL_MAX
+              value: {{ $v.pgPoolMax | quote }}
+            - name: SOURCE_STORAGE_DIR
+              value: {{ $v.sourceStorage.path | quote }}
+            {{- with $v.migrationsDir }}
+            - name: MIGRATIONS_DIR
+              value: {{ . | quote }}
+            {{- end }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name }}
+                  key: database-url
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          {{- include "bbm.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: sources
+              mountPath: {{ $v.sourceStorage.path }}
+            {{- if $csi }}
+            - name: secrets-store
+              mountPath: {{ .Values.secrets.csi.mountPath }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: sources
+          emptyDir:
+            sizeLimit: {{ $v.sourceStorage.sizeLimit }}
+        {{- if $csi }}
+        {{- include "bbm.csiVolume" (dict "spc" .Values.secrets.csi.secretProviderClassName) | nindent 8 }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  type: {{ $v.service.type }}
+  selector:
+    {{- include "bbm.selectorLabels" (dict "root" $ "component" "api") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $v.port }}
+      targetPort: http
+      protocol: TCP
+{{- if $v.hpa.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $name }}
+  minReplicas: {{ $v.hpa.minReplicas }}
+  maxReplicas: {{ $v.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $v.hpa.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $v.hpa.targetMemoryUtilizationPercentage }}
+{{- end }}
+{{- if and $v.pdb.enabled (gt (int (include "bbm.minReplicas" $v)) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bbm.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  minAvailable: {{ $v.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "bbm.selectorLabels" (dict "root" $ "component" "api") | nindent 6 }}
+{{- end }}

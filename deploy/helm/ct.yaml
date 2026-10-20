@@ -1,0 +1,17 @@
+# chart-testing (ct) config. Run from the repo root:
+#   ct lint    --config deploy/helm/ct.yaml --all
+#   ct install --config deploy/helm/ct.yaml --all \
+#     --helm-extra-set-args "--set=global.image.tag=<tag-loaded-into-kind>"
+#
+# ct picks up deploy/helm/bbm/ci/*-values.yaml (a symlink to values-ci.yaml).
+target-branch: main
+chart-dirs:
+  - deploy/helm
+# The chart is internal (not published to a chart repo): no maintainers list
+# to validate, and versions are not bumped per change, since the deployed artifact
+# is the image tag, not the chart version.
+validate-maintainers: false
+check-version-increment: false
+# global.image.tag is required at template time; lint with a placeholder.
+helm-lint-extra-args: --set global.image.tag=ct-lint
+helm-extra-args: --timeout 600s
