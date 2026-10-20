@@ -31,8 +31,7 @@ export function StakeGate({
   const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: (valueEth: string) =>
-      auditorApi.postStake({ auditorId, amount: ethToWei(valueEth) }),
+    mutationFn: (amountWei: string) => auditorApi.postStake({ auditorId, amount: amountWei }),
     onSuccess: () => {
       setError(null);
       onStaked();
@@ -69,11 +68,19 @@ export function StakeGate({
           className="mt-3 flex flex-wrap items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            if (!(Number(amount) > 0)) {
+            let amountWei: string;
+            try {
+              amountWei = ethToWei(amount);
+            } catch {
+              setError("Enter a stake in ETH, up to 18 decimal places.");
+              return;
+            }
+            if (amountWei === "0") {
               setError("Enter a positive stake amount.");
               return;
             }
-            mutation.mutate(amount);
+            setError(null);
+            mutation.mutate(amountWei);
           }}
         >
           <label htmlFor="stake-amount" className="text-sm text-slate-400">
@@ -82,7 +89,7 @@ export function StakeGate({
           <input
             id="stake-amount"
             type="number"
-            min={1}
+            step="any"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             className="w-32 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-white"
