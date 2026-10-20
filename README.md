@@ -13,7 +13,12 @@ wins, and the bounty closes). The developer can dispute a Verified finding
 during the challenge window; an admin arbiter rules, and a losing auditor's
 stake is slashed. Auditors can also mark AI findings as false positives.
 
-Finding statuses: `Flagged → Submitted → Verified → Disputed/Rejected → Paid`.
+Finding statuses:
+
+- `Flagged → Submitted → Verified → Paid`
+- `Flagged → Rejected` (false positive) and `Submitted → Rejected` (PoC fails)
+- `Verified → Disputed`, then `Disputed → Verified` (auditor wins) or `Disputed → Rejected` (developer wins)
+- `Paid` and `Rejected` are final.
 
 ## Repository layout
 

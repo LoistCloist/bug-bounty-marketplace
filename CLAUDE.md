@@ -6,7 +6,7 @@ Guidance for Claude Code (and human contributors) working in this repo.
 
 AI-assisted smart contract security and bug-bounty marketplace. See
 `README.md` for the full product description and finding-status lifecycle
-(`Flagged → Submitted → Verified → Disputed/Rejected → Paid`).
+(`Flagged → Submitted → Verified → Paid`, with Rejected and Disputed branches).
 
 ## Commands
 

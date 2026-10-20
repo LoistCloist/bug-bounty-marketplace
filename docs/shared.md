@@ -11,7 +11,7 @@ from `@bbm/shared`; everything is re-exported from `src/index.ts`.
 | `src/common.ts`          | `TimestampSchema` (ISO datetime), `AddressSchema` (`0x` + 40 hex), `IdSchema`                                                                         |
 | `src/contract.ts`        | `ContractSchema`, `ContractStatusSchema`, `ContractSubmissionFieldsSchema`, source filename/size checks, `CONTRACT_SOURCE_MAX_BYTES` (100 KB)         |
 | `src/bounty.ts`          | `BountySchema`                                                                                                                                        |
-| `src/finding.ts`         | `FindingSchema`, `FindingStatusSchema` (`Flagged → Submitted → Verified → Disputed/Rejected → Paid`), `FindingSeveritySchema`, status history entries |
+| `src/finding.ts`         | `FindingSchema`, `FindingStatusSchema` (`Flagged → Submitted → Verified → Paid`, plus `Rejected` and `Disputed` branches), `FindingSeveritySchema`, status history entries |
 | `src/poc-submission.ts`  | `PoCSubmissionSchema`, `SandboxStatusSchema`                                                                                                          |
 | `src/dispute.ts`         | `DisputeSchema`, `DisputeRulingSchema`                                                                                                                |
 | `src/auditor-profile.ts` | `AuditorProfileSchema`                                                                                                                                |
