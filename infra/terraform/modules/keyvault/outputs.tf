@@ -22,3 +22,8 @@ output "rbac_authorization_enabled" {
   description = "Whether the vault uses Azure RBAC for data-plane access (always true)."
   value       = azurerm_key_vault.this.rbac_authorization_enabled
 }
+
+output "secret_officer_principal_types" {
+  description = "Secrets Officer grants made by this module (sp/<id> or user/<id> => principal_type)."
+  value       = { for k, ra in azurerm_role_assignment.secrets_officer : k => ra.principal_type }
+}

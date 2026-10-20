@@ -47,6 +47,11 @@ resource "azurerm_subnet" "pe" {
 # manages on the node NICs, and AKS never edits this one, so the ingress
 # ports must be opened explicitly. Default rules still allow VNet and
 # AzureLoadBalancer traffic.
+#
+# The destination is the ingress public IP, not the subnet CIDR: the AKS
+# Standard LB uses floating IP (direct server return), so inbound packets
+# reach the node still addressed to the LB frontend IP. A rule scoped to the
+# subnet CIDR would never match and DenyAllInBound would drop the traffic.
 resource "azurerm_network_security_group" "aks" {
   name                = "nsg-${var.name}-${var.subnets.aks.name}"
   resource_group_name = var.resource_group_name
@@ -61,7 +66,7 @@ resource "azurerm_network_security_group" "aks" {
     protocol                   = "Tcp"
     source_address_prefix      = "Internet"
     source_port_range          = "*"
-    destination_address_prefix = var.subnets.aks.cidr
+    destination_address_prefix = var.ingress_public_ip
     destination_port_ranges    = var.ingress_ports
   }
 }

@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
+    }
   }
 
   # Partial config: envs/<env>/backend-compute.hcl + key=<env>/compute.tfstate (scripts/tf.sh).

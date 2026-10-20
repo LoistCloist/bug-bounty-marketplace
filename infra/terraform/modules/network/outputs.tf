@@ -35,3 +35,8 @@ output "postgres_private_dns_zone_id" {
   value       = azurerm_private_dns_zone.postgres.id
   depends_on  = [azurerm_private_dns_zone_virtual_network_link.postgres]
 }
+
+output "ingress_destination_address_prefix" {
+  description = "Destination of the AKS NSG Internet-ingress rule (the ingress public IP; the LB uses floating IP)."
+  value       = one([for r in azurerm_network_security_group.aks.security_rule : r.destination_address_prefix if r.name == "allow-internet-ingress"])
+}

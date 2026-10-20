@@ -18,8 +18,14 @@ variable "tenant_id" {
   type        = string
 }
 
-variable "secret_officer_object_ids" {
-  description = "Entra object IDs granted Key Vault Secrets Officer on this vault: the human running a local apply (and e.g. bbm-admins). The env CI identity already has it on the data RG from bootstrap."
+variable "secret_officer_sp_object_ids" {
+  description = "Service principal object IDs granted Key Vault Secrets Officer on this vault. Assigned with principal_type ServicePrincipal, so CI (gh-bbm-<env>) can apply them. The env CI identity itself already has the role on the data RG from bootstrap."
+  type        = list(string)
+  default     = []
+}
+
+variable "secret_officer_user_object_ids" {
+  description = "Entra user object IDs granted Key Vault Secrets Officer on this vault (the human running a local apply, whoever sets llm-api-key). Assigned with principal_type User, which CI's constrained RBAC admin cannot do: changes to this list must be applied locally by a subscription Owner first."
   type        = list(string)
   default     = []
 }
