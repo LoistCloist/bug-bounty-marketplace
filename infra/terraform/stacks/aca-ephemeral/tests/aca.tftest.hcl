@@ -43,6 +43,7 @@ variables {
   kind            = "test"
   env_name        = "run-12345678901-1"
   image_tag       = "sha-abc1234"
+  tfstate_account = "stbbmtfstatea1b2"
 }
 
 run "test_env" {
@@ -165,4 +166,34 @@ run "rejects_long_env_name" {
   }
 
   expect_failures = [var.env_name]
+}
+
+run "rejects_missing_tfstate_account" {
+  command = plan
+
+  variables {
+    tfstate_account = ""
+  }
+
+  expect_failures = [var.tfstate_account]
+}
+
+run "rejects_bad_tfstate_account" {
+  command = plan
+
+  variables {
+    tfstate_account = "St-BBM-tfstate"
+  }
+
+  expect_failures = [var.tfstate_account]
+}
+
+run "rejects_empty_tfstate_resource_group" {
+  command = plan
+
+  variables {
+    tfstate_resource_group = ""
+  }
+
+  expect_failures = [var.tfstate_resource_group]
 }
