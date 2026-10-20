@@ -1,7 +1,7 @@
 import { createPublicClient, createWalletClient, http, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { createAuditorStakingPort, type AuditorStakingPort } from "./auditor-staking.js";
-import type { ChainConfig } from "./config.js";
+import { claimLockEnabled, loadChainConfig, type ChainConfig } from "./config.js";
 
 /** Builds the AuditorStaking port against the configured RPC node, signing
  * lock/unlock with the operator key. Only called when a chain is configured. */
@@ -13,4 +13,19 @@ export function createAuditorStakingFromConfig(config: ChainConfig): AuditorStak
     publicClient: createPublicClient({ transport }),
     walletClient: createWalletClient({ account, transport }),
   });
+}
+
+/**
+ * Decides whether the API gets an AuditorStaking port. Returns undefined
+ * unless CHAIN_RPC_URL is set and CLAIM_LOCK_ENABLED=true; claims then skip
+ * the on-chain lock. The chain config is still parsed when the lock is off,
+ * so a malformed CHAIN_RPC_URL setup fails at startup either way.
+ */
+export function buildAuditorStakingPort(
+  env: NodeJS.ProcessEnv,
+  createPort: (config: ChainConfig) => AuditorStakingPort = createAuditorStakingFromConfig,
+): AuditorStakingPort | undefined {
+  const chainConfig = loadChainConfig(env);
+  if (!chainConfig || !claimLockEnabled(env)) return undefined;
+  return createPort(chainConfig);
 }
