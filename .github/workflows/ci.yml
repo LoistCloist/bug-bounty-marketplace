@@ -82,6 +82,7 @@ jobs:
             analysis:
               - 'workers/analysis/**'
               - 'packages/shared/schema/**'
+              - '.github/workflows/ci.yml'
 
             # Anything that can change a container image or the compose
             # stack. The containers job builds every image and boots the
@@ -234,6 +235,10 @@ jobs:
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pinned: gas snapshots differ across forge versions. Keep in sync
+          # with contracts/Dockerfile.
+          version: v1.3.5
 
       - name: Forge build
         working-directory: contracts
@@ -242,6 +247,16 @@ jobs:
       - name: Forge test
         working-directory: contracts
         run: forge test -vvv
+
+      # Regression: fail when gas usage changes without the committed
+      # snapshot being updated (`forge snapshot` and commit the result).
+      - name: Gas snapshot check
+        working-directory: contracts
+        run: forge snapshot --check
+
+      - name: Deploy script dry run
+        working-directory: contracts
+        run: forge script script/Deploy.s.sol
 
       - name: Slither static analysis
         uses: crytic/slither-action@v0.4.0
