@@ -4,8 +4,10 @@ import { privateKeyToAccount } from "viem/accounts";
 
 export interface ChainConfig {
   rpcUrl: string;
-  /** RPC URL the browser uses (PUBLIC_CHAIN_RPC_URL); defaults to rpcUrl. */
-  publicRpcUrl: string;
+  /** RPC URL the browser uses (PUBLIC_CHAIN_RPC_URL). Null when unset: the
+   * internal URL is never published, since provider URLs often carry an API
+   * key. */
+  publicRpcUrl: string | null;
   chainId: number;
   operatorPrivateKey: Hex;
   auditorStakingAddress: Address;
@@ -31,6 +33,12 @@ const PRIVATE_KEY = /^0x[a-fA-F0-9]{64}$/;
  * Reads chain settings from the environment. Returns null when CHAIN_RPC_URL
  * is unset, so the API runs without a chain, the same way it runs without
  * DATABASE_URL. Once CHAIN_RPC_URL is set, every other variable is required.
+ *
+ * With CHAIN_DEPLOYMENTS_FILE (the deploy script's deployments/<chainId>.json),
+ * the contract addresses, arbiter and challenge window come only from that
+ * file; AUDITOR_STAKING_ADDRESS, BOUNTY_ESCROW_ADDRESS,
+ * DISPUTE_RESOLUTION_ADDRESS, ARBITER_ADDRESS and CHALLENGE_WINDOW_SECONDS are
+ * then ignored. The file's chainId must equal CHAIN_ID.
  */
 export function loadChainConfig(
   env: NodeJS.ProcessEnv,
@@ -67,13 +75,25 @@ export function loadChainConfig(
   const operatorAddress = privateKeyToAccount(operatorPrivateKey as Hex).address;
   const common = {
     rpcUrl,
-    publicRpcUrl: env.PUBLIC_CHAIN_RPC_URL || rpcUrl,
+    publicRpcUrl: env.PUBLIC_CHAIN_RPC_URL || null,
     chainId,
     operatorPrivateKey: operatorPrivateKey as Hex,
   };
 
   if (deploymentsFile) {
-    return { ...common, ...readDeployment(deploymentsFile, readFile(deploymentsFile)) };
+    let text: string;
+    try {
+      text = readFile(deploymentsFile);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(
+          `CHAIN_DEPLOYMENTS_FILE ${deploymentsFile} does not exist: deploy the contracts first (pnpm stack:demo or docker compose run --rm contracts-deploy)`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
+    return { ...common, ...readDeployment(deploymentsFile, text, chainId) };
   }
 
   const addresses = [
@@ -109,6 +129,7 @@ export function loadChainConfig(
 function readDeployment(
   path: string,
   text: string,
+  chainId: number,
 ): Pick<
   ChainConfig,
   | "auditorStakingAddress"
@@ -120,8 +141,8 @@ function readDeployment(
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    throw new Error(`CHAIN_DEPLOYMENTS_FILE ${path} is not valid JSON`);
+  } catch (err) {
+    throw new Error(`CHAIN_DEPLOYMENTS_FILE ${path} is not valid JSON`, { cause: err });
   }
   for (const key of DEPLOYMENT_ADDRESS_KEYS) {
     const value = parsed[key];
@@ -129,8 +150,11 @@ function readDeployment(
       throw new Error(`CHAIN_DEPLOYMENTS_FILE ${path} has no valid ${key} address`);
     }
   }
-  const challengeWindowSeconds = Number(parsed.challengeWindow);
-  if (!Number.isInteger(challengeWindowSeconds) || challengeWindowSeconds < 0) {
+  if (parsed.chainId !== chainId) {
+    throw new Error(`CHAIN_DEPLOYMENTS_FILE ${path} is for chain ${String(parsed.chainId)}, not CHAIN_ID ${chainId}`);
+  }
+  const challengeWindowSeconds = parsed.challengeWindow;
+  if (typeof challengeWindowSeconds !== "number" || !Number.isInteger(challengeWindowSeconds) || challengeWindowSeconds < 0) {
     throw new Error(`CHAIN_DEPLOYMENTS_FILE ${path} has no valid challengeWindow`);
   }
   return {

@@ -136,6 +136,9 @@ database and chain, starts Postgres and a local anvil chain, deploys the
 contracts with a 60-second challenge window, then starts the API (pointed at
 the deployment through `docker-compose.chain.yml`) and the analysis service
 with the PoC sandbox. It prints the deployment and `GET /api/chain`.
+On-chain verdicts, payouts, disputes and the in-browser wallet arrive with
+the follow-up PRs of the on-chain lifecycle plan
+(`docs/superpowers/plans/2026-10-20-onchain-lifecycle.md`).
 
 ```sh
 pnpm stack:demo

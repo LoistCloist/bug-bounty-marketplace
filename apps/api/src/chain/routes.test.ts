@@ -42,3 +42,13 @@ describe("GET /api/chain", () => {
     });
   });
 });
+
+describe("GET /api/chain without a public RPC URL", () => {
+  it("never publishes the internal RPC URL", async () => {
+    const app = buildApp({ chainConfig: { ...CONFIG, publicRpcUrl: null } });
+    const body = (await app.inject({ method: "GET", url: "/api/chain" })).json();
+    expect(body.configured).toBe(true);
+    expect(body).not.toHaveProperty("rpcUrl");
+    expect(JSON.stringify(body)).not.toContain(CONFIG.rpcUrl);
+  });
+});

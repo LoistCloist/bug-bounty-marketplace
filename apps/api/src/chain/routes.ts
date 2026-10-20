@@ -15,7 +15,7 @@ export function chainInfo(config: ChainConfig | null): ChainInfo {
   return {
     configured: true,
     chainId: config.chainId,
-    rpcUrl: config.publicRpcUrl,
+    ...(config.publicRpcUrl ? { rpcUrl: config.publicRpcUrl } : {}),
     addresses: {
       auditorStaking: config.auditorStakingAddress,
       bountyEscrow: config.bountyEscrowAddress,

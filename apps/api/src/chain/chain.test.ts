@@ -64,6 +64,7 @@ describe("loadChainConfig", () => {
       disputeResolution: "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
       arbiter: ARBITER,
       challengeWindow: 60,
+      chainId: 31337,
     };
     const config = loadChainConfig(
       {
@@ -92,7 +93,8 @@ describe("loadChainConfig", () => {
     expect(() =>
       loadChainConfig(
         { CHAIN_RPC_URL: "http://x", CHAIN_ID: "31337", OPERATOR_PRIVATE_KEY: KEY, CHAIN_DEPLOYMENTS_FILE: "/d.json" },
-        () => JSON.stringify({ auditorStaking: STAKING, disputeResolution: STAKING, arbiter: ARBITER, challengeWindow: 60 }),
+        () =>
+          JSON.stringify({ auditorStaking: STAKING, disputeResolution: STAKING, arbiter: ARBITER, challengeWindow: 60, chainId: 31337 }),
       ),
     ).toThrow(/bountyEscrow/);
   });
@@ -101,7 +103,60 @@ describe("loadChainConfig", () => {
     const config = loadChainConfig(VALID_ENV);
     expect(config?.arbiterAddress).toBe(privateKeyToAccount(KEY as Hex).address);
     expect(config?.challengeWindowSeconds).toBe(259200);
-    expect(config?.publicRpcUrl).toBe(VALID_ENV.CHAIN_RPC_URL);
+    expect(config?.publicRpcUrl).toBeNull();
+  });
+
+  const FILE_ENV = {
+    CHAIN_RPC_URL: "http://anvil:8545",
+    CHAIN_ID: "31337",
+    OPERATOR_PRIVATE_KEY: KEY,
+    CHAIN_DEPLOYMENTS_FILE: "/d.json",
+  };
+  const GOOD_FILE = {
+    auditorStaking: STAKING,
+    bountyEscrow: STAKING,
+    disputeResolution: STAKING,
+    arbiter: ARBITER,
+    challengeWindow: 60,
+    chainId: 31337,
+  };
+
+  it("rejects a deployments file that is not JSON", () => {
+    expect(() => loadChainConfig(FILE_ENV, () => "not json")).toThrow(/not valid JSON/);
+  });
+
+  it("rejects a non-numeric challengeWindow in the deployments file", () => {
+    expect(() =>
+      loadChainConfig(FILE_ENV, () => JSON.stringify({ ...GOOD_FILE, challengeWindow: null })),
+    ).toThrow(/challengeWindow/);
+    expect(() =>
+      loadChainConfig(FILE_ENV, () => JSON.stringify({ ...GOOD_FILE, challengeWindow: "60" })),
+    ).toThrow(/challengeWindow/);
+  });
+
+  it("rejects a deployments file for another chain", () => {
+    expect(() =>
+      loadChainConfig(FILE_ENV, () => JSON.stringify({ ...GOOD_FILE, chainId: 11155111 })),
+    ).toThrow(/not CHAIN_ID 31337/);
+  });
+
+  it("explains a missing deployments file", () => {
+    expect(() =>
+      loadChainConfig(FILE_ENV, () => {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }),
+    ).toThrow(/deploy the contracts first/);
+  });
+
+  it("rejects a malformed ARBITER_ADDRESS", () => {
+    expect(() => loadChainConfig({ ...VALID_ENV, ARBITER_ADDRESS: "0x12" })).toThrow(/ARBITER_ADDRESS/);
+  });
+
+  it("reads CHALLENGE_WINDOW_SECONDS and rejects a bad value", () => {
+    expect(loadChainConfig({ ...VALID_ENV, CHALLENGE_WINDOW_SECONDS: "60" })?.challengeWindowSeconds).toBe(60);
+    expect(() => loadChainConfig({ ...VALID_ENV, CHALLENGE_WINDOW_SECONDS: "soon" })).toThrow(
+      /CHALLENGE_WINDOW_SECONDS/,
+    );
   });
 
   it("rejects a non-integer chain id", () => {

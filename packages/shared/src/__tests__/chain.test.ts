@@ -24,6 +24,18 @@ describe("ChainInfoSchema", () => {
     expect(ChainInfoSchema.parse(info)).toEqual(info);
   });
 
+  it("accepts a configured chain without a public RPC URL", () => {
+    const info = {
+      configured: true,
+      chainId: 31337,
+      addresses: { auditorStaking: A, bountyEscrow: B, disputeResolution: C },
+      arbiter: D,
+      challengeWindowSeconds: 60,
+      requiredStakeWei: "1",
+    };
+    expect(ChainInfoSchema.parse(info)).toEqual(info);
+  });
+
   it("rejects a configured chain without addresses", () => {
     expect(() =>
       ChainInfoSchema.parse({

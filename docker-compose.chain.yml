@@ -1,7 +1,11 @@
 # Opt-in overlay: runs the API against the local anvil chain with the contracts
-# deployed by `contracts-deploy`, so bounties, stakes, verdicts, disputes and
-# payouts happen on-chain. Use it through `pnpm stack:demo`, which resets the
-# database and chain and deploys first. All keys below are anvil's well-known
+# deployed by `contracts-deploy`. Use it through `pnpm stack:demo`, which resets
+# the database and chain and deploys first: the API refuses to start until
+# /deployments/31337.json exists. Restarting only the anvil container wipes
+# the chain but keeps the old deployment file, so rerun `pnpm stack:demo`.
+# The on-chain verdict, indexer and sign-in settings (CHAIN_ENABLED,
+# VERDICT_INTERVAL_MS, INDEXER_POLL_MS, SESSION_SECRET) are read once the
+# follow-up PRs of the on-chain lifecycle plan land. All keys below are anvil's well-known
 # dev keys: local demo only, never use them anywhere else.
 services:
   api:

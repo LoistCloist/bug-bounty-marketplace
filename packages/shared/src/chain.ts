@@ -9,8 +9,10 @@ export const ChainInfoSchema = z.discriminatedUnion("configured", [
   z.object({
     configured: z.literal(true),
     chainId: z.number().int().positive(),
-    /** RPC URL reachable from the browser (not the API's internal one). */
-    rpcUrl: z.string().url(),
+    /** RPC URL reachable from the browser (not the API's internal one).
+     * Absent when the API has no public URL configured; the browser then
+     * cannot sign transactions itself. */
+    rpcUrl: z.string().url().optional(),
     addresses: z.object({
       auditorStaking: AddressSchema,
       bountyEscrow: AddressSchema,
