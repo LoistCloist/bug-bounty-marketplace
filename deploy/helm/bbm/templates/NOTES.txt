@@ -1,0 +1,51 @@
+bbm {{ .Chart.AppVersion }} (chart {{ .Chart.Version }}) installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+Image tag: {{ .Values.global.image.tag }}{{ with .Values.global.image.registry }} from {{ . }}{{ end }}
+
+Components:
+  web       {{ include "bbm.fullname" . }}-web:{{ .Values.web.port }}   (/healthz)
+  api       {{ include "bbm.fullname" . }}-api:{{ .Values.api.port }}   (/health)
+{{- if .Values.analysis.enabled }}
+  analysis  {{ include "bbm.fullname" . }}-analysis:{{ .Values.analysis.port }}   (/health){{ if .Values.analysis.keda.enabled }}, scaled by KEDA on queue {{ .Values.azure.queueName }}{{ end }}
+{{- end }}
+{{- if .Values.sandbox.enabled }}
+  sandbox   namespace {{ .Values.sandbox.namespace }} (stub: RBAC, quota, deny-all, Job template)
+{{- end }}
+
+Secrets: provider={{ .Values.secrets.provider }} -> Secret {{ .Values.secrets.name }}
+{{- if eq .Values.secrets.provider "plain" }}
+  WARNING: provider=plain stores secrets in clear text in the Helm release. Dev/CI only.
+{{- else if eq .Values.secrets.provider "csi" }}
+  Synced from Key Vault {{ .Values.azure.keyVaultName | default "<unset>" }} by SecretProviderClass {{ .Values.secrets.csi.secretProviderClassName }}.
+{{- end }}
+Migrations: {{ if .Values.migrations.enabled }}pre-install/pre-upgrade hook Job (api runs with MIGRATE_ON_BOOT=false){{ else }}run by the api on boot (MIGRATE_ON_BOOT={{ .Values.api.migrateOnBoot }}){{ end }}
+
+{{- if .Values.ingress.enabled }}
+
+Ingress (class {{ .Values.ingress.className }}):
+  {{ if eq .Values.ingress.tls.mode "certManager" }}https{{ else }}http{{ end }}://{{ .Values.ingress.host | default "<any host>" }}/
+{{- if .Values.ingress.appRouting.enabled }}
+  NginxIngressController "{{ .Values.ingress.appRouting.name }}" (cluster-scoped) binds public IP {{ .Values.ingress.publicIpName | default "<unset>" }}.
+{{- end }}
+{{- else }}
+
+No Ingress. Reach the app with:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "bbm.fullname" . }}-web {{ .Values.web.port }}:{{ .Values.web.port }}
+{{- end }}
+
+{{- $missing := list }}
+{{- if eq .Values.secrets.provider "csi" }}
+{{- range $k := list "tenantId" "keyVaultName" "apiClientId" }}
+{{- if not (index $.Values.azure $k) }}{{ $missing = append $missing (printf "azure.%s" $k) }}{{ end }}
+{{- end }}
+{{- end }}
+{{- if and .Values.ingress.enabled (not .Values.ingress.host) }}{{ $missing = append $missing "ingress.host" }}{{ end }}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.restrictEgress (not .Values.networkPolicy.postgresCidr) }}{{ $missing = append $missing "networkPolicy.postgresCidr (api cannot reach Postgres)" }}{{ end }}
+{{- with $missing }}
+
+WARNING: values normally provided by values-infra.yaml are missing:
+{{- range . }}
+  - {{ . }}
+{{- end }}
+{{- end }}
+
+Run `helm test {{ .Release.Name }} -n {{ .Release.Namespace }}` to curl /health and /healthz in-cluster.

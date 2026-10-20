@@ -1,0 +1,344 @@
+# Default values for the bbm chart.
+#
+# These defaults are deliberately "safe": they render and install on any
+# vanilla cluster (kind, minikube, ct install) with no Azure dependencies.
+# Real environments layer, in order:
+#
+#   values.yaml -> values-<env>.yaml -> values-infra.yaml -> --set global.image.tag=sha-xxxxxxx
+#
+# values-infra.yaml is generated from the terraform compute stack
+# (`scripts/tf.sh compute <env> output -raw helm_values`) and is never
+# committed. See deploy/helm/README.md.
+
+# -- Override the resource name prefix (default "bbm"). Resource names are
+# NOT derived from the release name on purpose: workload identity federated
+# credentials are bound to fixed ServiceAccount names (bbm-api, ...), and the
+# web pod reaches the API at http://bbm-api:3001.
+fullnameOverride: ""
+
+global:
+  image:
+    # -- Registry host prepended to every image repository, e.g.
+    # acrbbmxxxx.azurecr.io (comes from values-infra.yaml). Empty = no prefix
+    # (images resolve against the node's default registry / kind-loaded images).
+    registry: ""
+    # -- REQUIRED. Image tag used by every component that doesn't set its own
+    # image.tag, e.g. sha-abc1234. Rendering fails if it is empty.
+    tag: ""
+    # -- Default image pull policy for all components.
+    pullPolicy: IfNotPresent
+  # -- imagePullSecrets for every pod (AKS pulls from ACR via the kubelet
+  # identity, so this is normally empty).
+  imagePullSecrets: []
+  # -- nodeSelector applied to every workload pod (merged under the
+  # component's own nodeSelector, which wins on key conflicts).
+  nodeSelector: {}
+  # -- Tolerations appended to every workload pod.
+  tolerations: []
+  # -- When true, template rendering fails if any value that must come from
+  # values-infra.yaml (terraform output) is missing for the enabled features.
+  # deploy.yml sets this to true; lint/CI leave it false so env files can be
+  # linted without terraform outputs.
+  requireInfraValues: false
+
+# Values sourced from terraform (`helm_values` output -> values-infra.yaml).
+# Leave empty here; they are placeholders documented for reference.
+azure:
+  workloadIdentity:
+    # -- Label pods with azure.workload.identity/use=true and annotate the
+    # ServiceAccounts with their client IDs. Requires the AKS workload
+    # identity webhook (OIDC issuer + workload identity enabled).
+    enabled: false
+  # -- Entra tenant ID (used by the SecretProviderClass).
+  tenantId: ""
+  # -- Key Vault name holding database-url / llm-api-key.
+  keyVaultName: ""
+  # -- Client ID of id-bbm-<env>-api (ServiceAccount bbm-api, SPC bbm-kv).
+  apiClientId: ""
+  # -- Client ID of id-bbm-<env>-worker (ServiceAccount bbm-analysis, KEDA).
+  workerClientId: ""
+  # -- Client ID used by the migrations Job (ServiceAccount bbm-migrations);
+  # terraform sets it to the api identity.
+  migrationsClientId: ""
+  # -- Client ID of id-bbm-<env>-sandbox (ServiceAccount bbm-sandbox-runner).
+  sandboxClientId: ""
+  # -- Storage account name (stbbm<stg|prd><sfx>).
+  storageAccountName: ""
+  # -- Blob endpoint, e.g. https://stbbmstgxxxx.blob.core.windows.net/
+  storageBlobEndpoint: ""
+  # -- Storage queue consumed by the analysis worker.
+  queueName: analysis-jobs
+
+# Non-secret runtime config rendered into ConfigMap bbm-config and loaded
+# with envFrom by every workload.
+config:
+  # -- NODE_ENV for the Node services.
+  nodeEnv: production
+  # -- LOG_LEVEL for every service.
+  logLevel: info
+  # -- Extra key/value pairs added to the ConfigMap verbatim.
+  extra: {}
+
+secrets:
+  # -- Where Secret bbm-secrets (keys database-url, llm-api-key) comes from:
+  #   plain    - the chart renders a plain Secret from secrets.plain.* (DEV/CI ONLY:
+  #              the values end up in the Helm release secret in clear text)
+  #   csi      - SecretProviderClass bbm-kv syncs it from Azure Key Vault via the
+  #              Secrets Store CSI driver (staging/prod)
+  #   existing - a pre-created Secret named secrets.name is used as-is
+  provider: plain
+  # -- Name of the Kubernetes Secret workloads read from.
+  name: bbm-secrets
+  plain:
+    # -- DATABASE_URL for provider=plain. Dummy default so the chart installs
+    # on kind; the api will fail its health checks without a reachable DB.
+    databaseUrl: postgres://bbm:bbm@postgres:5432/bbm
+    # -- LLM API key for provider=plain.
+    llmApiKey: ""
+  csi:
+    # -- Name of the main SecretProviderClass.
+    secretProviderClassName: bbm-kv
+    # -- Mount path of the CSI volume (the CSI driver only syncs the
+    # Kubernetes Secret while a pod mounts the volume).
+    mountPath: /mnt/secrets
+    # -- Key Vault secret object names (match the terraform data stack).
+    objects:
+      databaseUrl: database-url
+      llmApiKey: llm-api-key
+
+serviceAccounts:
+  # -- Extra annotations for every ServiceAccount created by the chart.
+  annotations: {}
+
+web:
+  # -- Replica count when web.hpa.enabled is false.
+  replicaCount: 1
+  image:
+    repository: bbm/web
+    # -- Per-component tag override (defaults to global.image.tag).
+    tag: ""
+    # -- Per-component pull policy override (defaults to global.image.pullPolicy).
+    pullPolicy: ""
+  # -- Container (and Service) port.
+  port: 3000
+  service:
+    type: ClusterIP
+  # -- UID/GID the container runs as; must match the image's USER.
+  runAsUser: 1000
+  runAsGroup: 1000
+  # -- Writable emptyDir for the Next.js cache (the root filesystem is
+  # read-only). Path of .next/cache inside the standalone image.
+  nextCacheDir: /app/apps/web/.next/cache
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  hpa:
+    # -- Render an autoscaling/v2 HPA (CPU) and drop spec.replicas.
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    # -- Render a PodDisruptionBudget. Only rendered when the effective
+    # minimum replica count (hpa.minReplicas or replicaCount) is > 1.
+    enabled: false
+    minAvailable: 1
+  # -- Extra env vars (list of EnvVar objects).
+  extraEnv: []
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # -- Spread replicas across nodes (kubernetes.io/hostname, ScheduleAnyway).
+  topologySpread: true
+
+api:
+  # -- Replica count when api.hpa.enabled is false. Keep at 1 until the Blob
+  # storage adapter lands: uploads live on a per-pod emptyDir.
+  replicaCount: 1
+  image:
+    repository: bbm/api
+    tag: ""
+    pullPolicy: ""
+  port: 3001
+  service:
+    type: ClusterIP
+  runAsUser: 1000
+  runAsGroup: 1000
+  # -- MIGRATE_ON_BOOT when migrations.enabled is false. Forced to "false"
+  # when the migrations Job runs instead.
+  migrateOnBoot: true
+  # -- PG_POOL_MAX (pg pool size per pod).
+  pgPoolMax: 10
+  # -- MIGRATIONS_DIR override; empty = image default (dist/migrations).
+  migrationsDir: ""
+  # -- SOURCE_STORAGE_DIR, backed by an emptyDir.
+  sourceStorage:
+    path: /data/sources
+    sizeLimit: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  hpa:
+    # -- Render an autoscaling/v2 HPA (CPU + memory) and drop spec.replicas.
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 1
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  pdb:
+    enabled: false
+    minAvailable: 1
+  extraEnv: []
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpread: true
+
+migrations:
+  # -- Run `node dist/migrate-cli.js` as a pre-install/pre-upgrade hook Job
+  # (with the api image) and start the api with MIGRATE_ON_BOOT=false.
+  enabled: false
+  backoffLimit: 1
+  activeDeadlineSeconds: 300
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+analysis:
+  # -- Deploy the Python analysis worker (port 8000, /health).
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: bbm/analysis
+    tag: ""
+    pullPolicy: ""
+  port: 8000
+  service:
+    type: ClusterIP
+  runAsUser: 10001
+  runAsGroup: 10001
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  extraEnv: []
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpread: true
+  keda:
+    # -- Scale the worker with a KEDA ScaledObject on the Azure Storage Queue
+    # (azure-queue trigger, workload identity auth). Requires KEDA (AKS add-on)
+    # and drops spec.replicas from the Deployment.
+    enabled: false
+    minReplicaCount: 0
+    maxReplicaCount: 3
+    pollingInterval: 30
+    cooldownPeriod: 300
+    # -- Target messages per replica.
+    queueLength: "5"
+
+sandbox:
+  # -- Render the sandbox stub: Namespace bbm-sandbox (PSA restricted), runner
+  # ServiceAccount + RBAC, quota, deny-all NetworkPolicy and a Job template
+  # ConfigMap. Requires a sandbox node pool to actually run anything.
+  enabled: false
+  namespace: bbm-sandbox
+  jobTemplate:
+    # -- RuntimeClass for sandbox Jobs (AKS pod sandboxing / Kata).
+    runtimeClassName: kata-vm-isolation
+    nodeSelector:
+      bbm.io/pool: sandbox
+    tolerations:
+      - key: bbm.io/sandbox
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    activeDeadlineSeconds: 600
+    ttlSecondsAfterFinished: 300
+    runAsUser: 10001
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+        ephemeral-storage: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+        ephemeral-storage: 1Gi
+  quota:
+    pods: "10"
+    jobs: "10"
+    requestsCpu: "2"
+    requestsMemory: 4Gi
+    limitsCpu: "4"
+    limitsMemory: 8Gi
+    requestsEphemeralStorage: 4Gi
+    limitsEphemeralStorage: 8Gi
+
+ingress:
+  # -- Render the Ingress.
+  enabled: false
+  # -- IngressClass to use (created by the NginxIngressController below when
+  # ingress.appRouting.enabled).
+  className: bbm-nginx
+  # -- Public host, e.g. bbm-<env>.eastus2.cloudapp.azure.com (values-infra).
+  # Empty = no host rule (matches any host).
+  host: ""
+  # -- Extra Ingress annotations.
+  annotations: {}
+  tls:
+    # -- none | certManager. certManager adds the cert-manager.io/cluster-issuer
+    # annotation and a TLS block (cert-manager must be installed separately).
+    mode: none
+    clusterIssuer: letsencrypt-prod
+    secretName: bbm-tls
+  # -- Name of the static public IP to bind (values-infra).
+  publicIpName: ""
+  # -- Resource group of that public IP (values-infra).
+  publicIpResourceGroup: ""
+  appRouting:
+    # -- Render the AKS app-routing NginxIngressController `bbm`
+    # (CLUSTER-SCOPED; requires the app-routing add-on CRD).
+    enabled: false
+    name: bbm
+    controllerNamePrefix: nginx-bbm
+    scaling:
+      minReplicas: 1
+      maxReplicas: 2
+
+networkPolicy:
+  # -- Render NetworkPolicies (default-deny ingress + allow-lists).
+  enabled: false
+  # -- Also default-deny egress and allow only DNS / Postgres / HTTPS.
+  restrictEgress: false
+  # -- CIDR of the Postgres delegated subnet (snet-psql, values-infra). When
+  # empty the Postgres egress rule is omitted.
+  postgresCidr: ""
+  # -- Namespace the app-routing ingress controller pods run in.
+  ingressControllerNamespace: app-routing-system
+
+tests:
+  # -- Image used by the `helm test` pod.
+  image: curlimages/curl:8.10.1
