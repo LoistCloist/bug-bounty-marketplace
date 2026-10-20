@@ -207,6 +207,7 @@ jobs:
   api:
     name: api
     needs: changes
+    timeout-minutes: 20
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.root == 'true'
     runs-on: ubuntu-latest
     services:
@@ -254,8 +255,9 @@ jobs:
         run: pnpm --filter @bbm/api run build
 
       # Catches bundle and migration-copy regressions: the esbuild output
-      # must start on its own, apply dist/migrations against Postgres and
-      # answer /health.
+      # must start on its own, find and run dist/migrations against Postgres
+      # (already migrated by the tests, so this checks the copy, not the SQL)
+      # and answer /health.
       - name: Boot built API
         env:
           PORT: '3001'
@@ -267,7 +269,7 @@ jobs:
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; cat "$log"' EXIT
           for _ in $(seq 1 20); do
-            if curl -fs "localhost:$PORT/health"; then
+            if curl -fs --max-time 2 "localhost:$PORT/health"; then
               echo
               grep 'applied migrations' "$log"
               exit 0
@@ -525,6 +527,7 @@ jobs:
   terraform-static:
     name: terraform-static
     needs: changes
+    timeout-minutes: 20
     if: needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     env:
@@ -576,6 +579,7 @@ jobs:
   helm:
     name: helm
     needs: changes
+    timeout-minutes: 20
     if: needs.changes.outputs.helm == 'true'
     runs-on: ubuntu-latest
     env:
@@ -618,7 +622,7 @@ jobs:
               --set analysis.enabled=true --set sandbox.enabled=true --set migrations.enabled=true |
               kubeconform -strict -summary -kubernetes-version 1.31.0 \
                 -schema-location default \
-                -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+                -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
                 -schema-location 'deploy/helm/kubeconform-schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
             echo "::endgroup::"
           done
