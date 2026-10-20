@@ -179,3 +179,12 @@ def test_fallback_never_empty_when_slither_description_is_blank():
         index=0, check="weird-check", impact="Low", confidence="Low", description="  \n", raw={}
     )
     assert explanations_for([blank], {}) == [("Slither flagged weird-check.", "slither")]
+
+
+def test_llm_timeout_defaults_to_90s_for_reasoning_models():
+    # Grok-class reasoning models take ~20-30s on a real contract; analysis is
+    # a background job, so a generous timeout costs nothing.
+    assert Settings.from_env({}).llm_timeout_s == 90
+    assert Settings.from_env({"LLM_TIMEOUT_SECONDS": "45"}).llm_timeout_s == 45
+    explainer = OpenAICompatibleExplainer(SETTINGS)
+    assert explainer._client.timeout == 90

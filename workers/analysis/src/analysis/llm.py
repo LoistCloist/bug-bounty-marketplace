@@ -22,7 +22,6 @@ from .findings import DetectorResult
 log = logging.getLogger(__name__)
 
 MAX_LLM_FINDINGS = 50
-_TIMEOUT_S = 30
 
 SYSTEM_PROMPT = (
     "You explain Slither static-analysis findings to the developer who wrote the "
@@ -97,7 +96,7 @@ class OpenAICompatibleExplainer:
             base_url=settings.llm_endpoint,
             api_key=settings.llm_api_key,
             http_client=http_client,
-            timeout=_TIMEOUT_S,
+            timeout=settings.llm_timeout_s,
             max_retries=1,
         )
 

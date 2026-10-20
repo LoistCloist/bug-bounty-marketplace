@@ -35,6 +35,7 @@ class Settings:
     llm_endpoint: str | None
     llm_api_key: str | None
     llm_model: str | None
+    llm_timeout_s: float
     sandbox_timeout_s: int
     sandbox_image: str
     challenge_window_s: int
@@ -54,6 +55,7 @@ class Settings:
             llm_endpoint=_opt(env, "LLM_ENDPOINT"),
             llm_api_key=_opt(env, "LLM_API_KEY"),
             llm_model=_opt(env, "LLM_MODEL"),
+            llm_timeout_s=float(env.get("LLM_TIMEOUT_SECONDS", "90")),
             sandbox_timeout_s=int(env.get("SANDBOX_TIMEOUT_SECONDS", "120")),
             sandbox_image=_opt(env, "SANDBOX_IMAGE") or "bbm-sandbox:latest",
             challenge_window_s=int(env.get("CHALLENGE_WINDOW_SECONDS", "86400")),
