@@ -31,7 +31,7 @@ pnpm --filter @bbm/shared typecheck
 # Once apps/web exists (feat/web-shell-mocks):
 NEXT_PUBLIC_API_MOCKING=enabled pnpm dev
 
-# Contracts (requires Foundry, see contracts/README.md):
+# Contracts (requires Foundry, see docs/contracts/foundry-setup.md):
 cd contracts && forge build && forge test
 ```
 
