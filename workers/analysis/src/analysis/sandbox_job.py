@@ -20,7 +20,7 @@ from .jobs import Job, complete
 from .pgsafe import without_nul
 from .sandbox import SandboxResult, build_tarball, run_poc
 from .schema_base import to_iso_z
-from .solc import UnsupportedSolcError, pick_solc
+from .solc import UnsupportedSolcError, pick_solc_for_all
 from .storage import read_source
 
 log = logging.getLogger(__name__)
@@ -59,12 +59,15 @@ def run_sandbox_job(
     except FileNotFoundError as err:
         return JobOutcome(ok=False, reason=f"Stored file missing: {err.filename}")
     try:
-        solc_version = pick_solc(target, settings.supported_solc)
+        # A compiler both the contract and the PoC accept (PoCs often pin one).
+        solc_version = pick_solc_for_all([target, poc], settings.supported_solc)
     except UnsupportedSolcError as err:
-        return JobOutcome(ok=False, reason=str(err))
-
-    tar = build_tarball(row["filename"], target, poc, solc_version)
-    result = runner(tar, row["id"], settings)
+        # The PoC's pragma can't be met alongside the contract's: the PoC
+        # can't compile here, which is a failed PoC, not an outage.
+        result = SandboxResult(status="Failed", log=str(err), infra_error=None)
+    else:
+        tar = build_tarball(row["filename"], target, poc, solc_version)
+        result = runner(tar, row["id"], settings)
     if result.status is None:
         return JobOutcome(ok=False, reason=result.infra_error, retryable=True)
 

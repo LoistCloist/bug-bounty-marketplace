@@ -21,9 +21,17 @@ from .paths import safe_filename
 
 LOG_LIMIT_BYTES = 65_536
 _TRUNCATED = "[truncated]\n"
-_DOCKER_RUN_FAILED = 125  # docker itself failed (daemon down, image missing, ...)
 _SUITE = re.compile(r"Suite result: (ok|FAILED)\. (\d+) passed; (\d+) failed")
 _KILLED = 137  # 128 + SIGKILL: the in-container time limit or the memory cap
+# Printed by the container before anything else. Without it the container
+# never started (Docker down, socket permission, missing image), whatever the
+# exit code, so the failure is ours and the job is retried.
+STARTED_MARKER = "bbm-sandbox-started"
+# forge output kept inside the container, so a noisy PoC can't flood the
+# worker's memory; the verdict lines are at the end.
+_OUTPUT_CAP_BYTES = 262_144
+# Time allowed for `docker rm` / `docker kill`.
+_DOCKER_CALL_TIMEOUT_S = 30
 # Extra time the outer subprocess allows for container start-up and teardown
 # beyond the in-container limit, before the worker kills the container itself.
 _STARTUP_GRACE_S = 30
@@ -77,8 +85,9 @@ def _script(timeout_s: int) -> str:
     # The limit is enforced inside the container too, so a PoC can't keep
     # running if the worker dies mid-run.
     return (
-        "mkdir -p /tmp/w && tar -x -C /tmp/w && cd /tmp/w"
-        f" && timeout -s KILL {timeout_s} forge test -vvv"
+        f"echo {STARTED_MARKER} && mkdir -p /tmp/w && tar -x -C /tmp/w && cd /tmp/w || exit 2; "
+        f"timeout -s KILL {timeout_s} forge test -vvv > /tmp/forge.log 2>&1; c=$?; "
+        f"tail -c {_OUTPUT_CAP_BYTES} /tmp/forge.log; exit $c"
     )
 
 
@@ -92,6 +101,8 @@ def docker_command(poc_id: str, settings: Settings) -> list[str]:
         "--name", container_name(poc_id),
         "--network", "none",
         "--memory", "1g",
+        "--memory-swap", "1g",
+        "--pull", "never",
         "--cpus", "1",
         "--pids-limit", "256",
         "--read-only",
@@ -127,28 +138,40 @@ def run_poc(
     tar: bytes, poc_id: str, settings: Settings, run: Runner = subprocess.run
 ) -> SandboxResult:
     timeout = settings.sandbox_timeout_s
+    outer_timeout = timeout + _STARTUP_GRACE_S
+    name = container_name(poc_id)
     try:
         # A container left over from a crashed worker would block the name.
-        run(["docker", "rm", "-f", container_name(poc_id)], capture_output=True)
+        run(["docker", "rm", "-f", name], capture_output=True, timeout=_DOCKER_CALL_TIMEOUT_S)
         proc = run(
             docker_command(poc_id, settings),
             input=tar,
             capture_output=True,
-            timeout=timeout + _STARTUP_GRACE_S,
+            timeout=outer_timeout,
         )
     except subprocess.TimeoutExpired:
+        # The in-container limit is the real one; getting here means start-up
+        # or Docker itself was slow, so retry rather than blame the PoC.
         # Killing the client is not enough: stop the container itself.
-        run(["docker", "kill", container_name(poc_id)], capture_output=True)
-        return SandboxResult(status="Failed", log=f"Timed out after {timeout}s", infra_error=None)
+        try:
+            run(["docker", "kill", name], capture_output=True, timeout=_DOCKER_CALL_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            pass
+        return SandboxResult(
+            status=None,
+            log="",
+            infra_error=f"Sandbox did not finish within {outer_timeout}s; Docker may be slow",
+        )
     except FileNotFoundError:
         return SandboxResult(status=None, log="", infra_error="Docker CLI not found")
 
-    output = (proc.stdout or b"").decode("utf-8", errors="replace") + (proc.stderr or b"").decode(
-        "utf-8", errors="replace"
-    )
-    if proc.returncode == _DOCKER_RUN_FAILED:
-        reason = output.strip().splitlines()[-1] if output.strip() else "docker run failed"
-        return SandboxResult(status=None, log=truncate_log(output), infra_error=reason)
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+    if STARTED_MARKER not in stdout:
+        lines = [line for line in stderr.strip().splitlines() if line.strip()]
+        reason = lines[-1].strip() if lines else f"docker run failed (exit {proc.returncode})"
+        return SandboxResult(status=None, log=truncate_log(stderr), infra_error=reason)
+    output = stdout.split(STARTED_MARKER + "\n", 1)[-1] + stderr
     if proc.returncode == _KILLED:
         reason = f"Killed after reaching the time limit ({timeout}s) or the memory limit (1 GB)\n"
         return SandboxResult(status="Failed", log=truncate_log(reason + output), infra_error=None)

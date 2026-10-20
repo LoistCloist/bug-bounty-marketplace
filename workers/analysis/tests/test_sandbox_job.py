@@ -173,3 +173,32 @@ def test_no_transaction_is_held_open_while_the_poc_runs(pg_conn, tmp_path, setti
 
     assert run_sandbox_job(pg_conn, job, settings, runner=runner).ok
     assert seen == [TransactionStatus.IDLE]
+
+
+def test_poc_pragma_compatible_with_the_target_picks_a_shared_compiler(pg_conn, tmp_path, settings):
+    import io
+    import tarfile
+
+    poc = POC.replace(b"pragma solidity ^0.8.19;", b"pragma solidity 0.8.20;")
+    _submitted_poc(pg_conn, tmp_path, poc_bytes=poc)
+    job = claim_next(pg_conn, 600, 3)
+    runner = FakeRunner(SandboxResult(status="Passed", log="", infra_error=None))
+    assert run_sandbox_job(pg_conn, job, settings, runner=runner).ok
+    with tarfile.open(fileobj=io.BytesIO(runner.calls[0][0])) as archive:
+        toml = archive.extractfile("foundry.toml").read().decode()
+    assert 'solc = "/opt/solc/solc-0.8.20"' in toml
+
+
+def test_poc_pragma_incompatible_with_the_target_rejects_it_with_a_reason(
+    pg_conn, tmp_path, settings
+):
+    poc = POC.replace(b"pragma solidity ^0.8.19;", b"pragma solidity ^0.7.0;")
+    finding_id, poc_id = _submitted_poc(pg_conn, tmp_path, poc_bytes=poc)
+    job = claim_next(pg_conn, 600, 3)
+    runner = FakeRunner(SandboxResult(status="Passed", log="", infra_error=None))
+    assert run_sandbox_job(pg_conn, job, settings, runner=runner).ok
+    assert runner.calls == []
+    stored = _row(pg_conn, "poc_submissions", poc_id)
+    assert stored["sandbox_status"] == "Failed"
+    assert "No supported Solidity version satisfies all of" in stored["sandbox_log"]
+    assert _row(pg_conn, "findings", finding_id)["status"] == "Rejected"
