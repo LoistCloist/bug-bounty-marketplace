@@ -138,7 +138,7 @@ export class PgContractRepository implements ContractRepository {
   }
 
   async listQueue(now: Date): Promise<QueueItem[]> {
-    const result = await this.pool.query<ContractRow & { amount: number; currency: string }>(
+    const result = await this.pool.query<ContractRow & { amount: string; currency: string }>(
       `SELECT ${contractColumns("$1")}, b.amount, b.currency
          FROM contracts c JOIN bounties b ON b.id = c.bounty_id
         WHERE c.status = 'Open' OR (c.status = 'Claimed' AND c.claim_expires_at <= $1)`,
@@ -146,7 +146,7 @@ export class PgContractRepository implements ContractRepository {
     );
     return result.rows.map((row) => ({
       ...toContract(row),
-      bounty: { amount: Number(row.amount), currency: row.currency },
+      bounty: { amount: String(row.amount), currency: row.currency },
     }));
   }
 

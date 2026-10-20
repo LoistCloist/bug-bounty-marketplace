@@ -148,7 +148,7 @@ describe("GET /api/auditor/queue", () => {
     const { app, seedContract, store } = setup();
     const small = await seedContract();
     const big = await seedContract();
-    store.bounties.get(big.bounty.id)!.amount = 9;
+    store.bounties.get(big.bounty.id)!.amount = "9000000000000000000";
     const response = await app.inject({ url: "/api/auditor/queue?sort=bounty" });
     expect(response.statusCode).toBe(200);
     const ids = (response.json() as Array<{ id: string }>).map((c) => c.id);

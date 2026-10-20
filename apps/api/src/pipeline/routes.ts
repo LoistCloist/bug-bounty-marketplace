@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { type PoCSubmission, PocSourceFilenameSchema, PocSourceSizeSchema } from "@bbm/shared";
+import {
+  compareWei,
+  type PoCSubmission,
+  PocSourceFilenameSchema,
+  PocSourceSizeSchema,
+} from "@bbm/shared";
 import type { ContractRepository, QueueItem } from "../contracts/repository.js";
 import type { SourceStorage } from "../contracts/storage.js";
 import { readMultipart } from "../http/multipart.js";
@@ -20,7 +25,7 @@ type QueueSort = (typeof QUEUE_SORTS)[number];
 function sortQueue(items: QueueItem[], sort: QueueSort | undefined): QueueItem[] {
   const by: Record<QueueSort, (a: QueueItem, b: QueueItem) => number> = {
     deadline: (a, b) => a.deadline.localeCompare(b.deadline),
-    bounty: (a, b) => b.bounty.amount - a.bounty.amount,
+    bounty: (a, b) => compareWei(b.bounty.amount, a.bounty.amount),
     newest: (a, b) => b.createdAt.localeCompare(a.createdAt),
   };
   return sort ? [...items].sort(by[sort]) : items;

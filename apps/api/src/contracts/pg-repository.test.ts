@@ -45,7 +45,7 @@ describe.skipIf(!databaseUrl)("PgContractRepository", () => {
       bounty: {
         id: bountyId,
         contractId,
-        amount: 2,
+        amount: "2000000000000000000",
         currency: "ETH",
         fundedAt: "2026-10-01T12:00:00.000Z",
         deadline: "2030-01-01T00:00:00.000Z",
