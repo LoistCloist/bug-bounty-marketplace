@@ -28,6 +28,8 @@ image pre-installs them. A pragma no version satisfies fails with
 | `POLL_INTERVAL_SECONDS` | `1` | Wait between polls when the queue is empty. |
 | `JOB_LEASE_SECONDS` / `JOB_MAX_ATTEMPTS` | `600` / `3` | Lease before a crashed job is retried; attempts before it fails. |
 | `WORKER_CONCURRENCY` | `2` | Jobs processed at once. |
+| `SANDBOX_ENABLED` | unset | `true`: also claim sandbox jobs and re-run auditors' PoCs in `bbm-sandbox` containers (needs the Docker socket; see `docker-compose.sandbox.yml` and [workers/sandbox](../sandbox/README.md)). |
+| `SANDBOX_TIMEOUT_SECONDS` / `CHALLENGE_WINDOW_SECONDS` | `120` / `86400` | PoC time limit; how long a Verified finding can be disputed. |
 
 Locally, put these in `workers/analysis/.env` (git-ignored; see
 `.env.example`); the service and the compose stack read it.

@@ -4,6 +4,7 @@ import { use } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { developerApi, ApiError } from "@/lib/api";
+import { AnalysisNotice } from "../_components/AnalysisNotice";
 import { FindingCard } from "../_components/FindingCard";
 
 const POLL_INTERVAL_MS = 2000;
@@ -29,6 +30,17 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
     queryKey: ["findings", id],
     queryFn: () => developerApi.listFindings(id),
     refetchInterval: POLL_INTERVAL_MS,
+  });
+
+  const analysisQuery = useQuery({
+    queryKey: ["analysis", id],
+    queryFn: () => developerApi.getAnalysisStatus(id),
+    // Stop polling once the analysis has finished either way.
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "Done" || status === "Failed" ? false : POLL_INTERVAL_MS;
+    },
+    retry: false,
   });
 
   const reclaimMutation = useMutation({
@@ -135,11 +147,13 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
           Could not load findings. Retrying automatically.
         </p>
       ) : findings.length === 0 ? (
-        <p className="mt-3 text-sm text-slate-400">
-          {contract.status === "Expired"
-            ? "This contract is closed. No findings are available."
-            : "Analysis is still running - findings will appear here automatically once ready."}
-        </p>
+        contract.status === "Expired" ? (
+          <p className="mt-3 text-sm text-slate-400">
+            This contract is closed. No findings are available.
+          </p>
+        ) : (
+          <AnalysisNotice status={analysisQuery.data} unavailable={analysisQuery.isError} />
+        )
       ) : (
         <div className="mt-4 space-y-4">
           {findings.map((finding) => (

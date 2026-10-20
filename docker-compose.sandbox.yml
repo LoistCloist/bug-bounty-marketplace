@@ -1,0 +1,16 @@
+# Opt-in overlay: lets the analysis service run auditors' PoCs in throwaway
+# bbm-sandbox containers on this machine's Docker. It mounts the Docker
+# socket, which is powerful, so it is not part of the default stack.
+#
+#   docker build -f workers/sandbox/Dockerfile -t bbm-sandbox:latest workers
+#   export DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+#   docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build --wait db api analysis
+services:
+  analysis:
+    environment:
+      SANDBOX_ENABLED: "true"
+    # The image runs as uid 10001; the socket's group grants it access.
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID to the group id of /var/run/docker.sock}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
