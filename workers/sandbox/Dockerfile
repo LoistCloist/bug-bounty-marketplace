@@ -15,12 +15,13 @@ RUN apk add --no-cache curl=8.14.1-r2 git=2.45.4-r0 jq=1.7.1-r0
 ARG FORGE_STD_COMMIT=f3dae6e6ee381f25eb6a246f7da9b85c91a68219
 COPY analysis/src/analysis/solc-versions.txt /tmp/solc-versions.txt
 RUN base=https://binaries.soliditylang.org/linux-amd64; \
-    curl -fsSL "$base/list.json" -o /tmp/list.json; \
+    fetch() { curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 "$@"; }; \
+    fetch "$base/list.json" -o /tmp/list.json; \
     mkdir -p /opt/solc; \
     grep -v '^#' /tmp/solc-versions.txt | while read -r v; do \
       path=$(jq -r --arg v "$v" '.releases[$v]' /tmp/list.json); \
       sha=$(jq -r --arg p "$path" '.builds[] | select(.path == $p) | .sha256' /tmp/list.json | sed 's/^0x//'); \
-      curl -fsSL "$base/$path" -o "/opt/solc/solc-$v"; \
+      fetch "$base/$path" -o "/opt/solc/solc-$v"; \
       echo "$sha  /opt/solc/solc-$v" | sha256sum -c -; \
       chmod 0555 "/opt/solc/solc-$v"; \
     done
