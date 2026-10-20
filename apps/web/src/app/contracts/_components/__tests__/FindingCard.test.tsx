@@ -76,4 +76,24 @@ describe("FindingCard", () => {
       expect(after.find((f) => f.id === verified!.id)?.status).toBe("Disputed");
     });
   });
+
+  it("links to the raw Slither output when the API serves it", () => {
+    renderCard({
+      id: "f1",
+      contractId: "contract_test",
+      severity: "High" as const,
+      slitherDetector: "reentrancy-eth",
+      rawOutputReference: "/api/findings/f1/raw",
+      llmExplanation: "Funds can be drained.",
+      status: "Flagged" as const,
+      statusHistory: [],
+      claimedByAuditorId: null,
+      claimExpiresAt: null,
+      isFalsePositive: false,
+      challengeWindowExpiresAt: null,
+    });
+    fireEvent.click(screen.getByText("Show raw Slither output"));
+    const link = screen.getByRole("link", { name: /raw Slither JSON.*opens in a new tab/ });
+    expect(link.getAttribute("href")).toBe("/api/findings/f1/raw");
+  });
 });

@@ -1,5 +1,14 @@
 import { z } from "zod";
-import { ContractSchema, DisputeSchema, FindingSchema, type Contract, type Dispute, type Finding } from "@bbm/shared";
+import {
+  AnalysisStatusSchema,
+  ContractSchema,
+  DisputeSchema,
+  FindingSchema,
+  type AnalysisStatus,
+  type Contract,
+  type Dispute,
+  type Finding,
+} from "@bbm/shared";
 import { getJson, postForm, postJson, toQueryString } from "./http";
 
 export interface SubmitContractInput {
@@ -40,6 +49,12 @@ export function getContract(contractId: string): Promise<Contract> {
 /** GET /api/contracts/:id/findings */
 export function listFindings(contractId: string): Promise<Finding[]> {
   return getJson(`/api/contracts/${contractId}/findings`, z.array(FindingSchema));
+}
+
+/** GET /api/contracts/:id/analysis - state of the Slither + LLM analysis
+ * (Queued, Running, Done, or Failed with the compiler error). */
+export function getAnalysisStatus(contractId: string): Promise<AnalysisStatus> {
+  return getJson(`/api/contracts/${contractId}/analysis`, AnalysisStatusSchema);
 }
 
 export interface DisputeFindingInput {

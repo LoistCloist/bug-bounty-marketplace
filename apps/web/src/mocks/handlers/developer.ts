@@ -101,6 +101,20 @@ export const developerHandlers = [
     return HttpResponse.json(listFindingsByContract(String(params.id)));
   }),
 
+  // The mock analysis is a timer, so it is Running until findings appear.
+  http.get("*/api/contracts/:id/analysis", ({ params }) => {
+    const contract = findContractById(String(params.id));
+    if (!contract) return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    const findings = listFindingsByContract(contract.id);
+    return HttpResponse.json({
+      contractId: contract.id,
+      status: findings.length > 0 ? "Done" : "Running",
+      error: null,
+      findingCount: findings.length,
+      updatedAt: contract.createdAt,
+    });
+  }),
+
   http.post("*/api/findings/:id/dispute", async ({ params, request }) => {
     const findingId = String(params.id);
     const body = (await request.json().catch(() => ({}))) as {
