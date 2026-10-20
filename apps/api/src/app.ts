@@ -8,6 +8,8 @@ import type { AuditorStakingPort } from "./chain/auditor-staking.js";
 import type { ChainActions } from "./chain/actions.js";
 import type { ChainConfig } from "./chain/config.js";
 import { registerChainRoutes } from "./chain/routes.js";
+import { Auth } from "./auth/session.js";
+import { registerAuthRoutes } from "./auth/routes.js";
 import { loadPipelineConfig, type PipelineConfig } from "./pipeline/config.js";
 import { MemoryPipelineRepository, MemoryStore } from "./pipeline/memory-repository.js";
 import type { PipelineRepository } from "./pipeline/repository.js";
@@ -40,6 +42,11 @@ export interface AppOptions {
   /** The chain the API talks to, or null/omitted for none. Served to the
    * browser by GET /api/chain. */
   chainConfig?: ChainConfig | null;
+  /** HMAC secret for session cookies (SESSION_SECRET). With it, the API serves
+   * signed-message sign-in and user routes act for the signed-in address. */
+  sessionSecret?: string;
+  /** Clock for sign-in; defaults to the pipeline config's clock. */
+  now?: () => Date;
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -57,6 +64,8 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
 
   void app.register(multipart, { limits: CONTRACT_MULTIPART_LIMITS });
   registerChainRoutes(app, { config: options.chainConfig ?? null });
+  const auth = options.sessionSecret ? new Auth(options.sessionSecret, options.now ?? config.now) : null;
+  if (auth) registerAuthRoutes(app, auth);
   registerContractRoutes(app, { repository, storage, now: config.now });
   registerPipelineRoutes(app, {
     contracts: repository,

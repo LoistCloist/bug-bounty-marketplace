@@ -40,6 +40,12 @@ if (chainConfig && !pool) {
   console.warn("@bbm/api CHAIN_RPC_URL is set but DATABASE_URL is not; chain actions are disabled");
 }
 // The port is only constructed when a chain is configured; no RPC call is made here.
+// With a chain, user routes act for the signed-in wallet, so sign-in needs a
+// session secret.
+const sessionSecret = process.env.SESSION_SECRET || undefined;
+if (chainConfig && !sessionSecret) {
+  throw new Error("CHAIN_RPC_URL is set but SESSION_SECRET is missing (needed for wallet sign-in)");
+}
 const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
 const lockEnabled = claimLockEnabled(process.env);
 const chainActions: ChainActions | undefined =
@@ -60,6 +66,7 @@ const app = buildApp({
   stakeReader: stakingPort,
   chainActions,
   chainConfig,
+  sessionSecret,
 });
 
 /** Runs the payout keeper only when a chain is configured. */
