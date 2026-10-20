@@ -99,6 +99,36 @@ The web image calls the API through its `/api/*` proxy
 `NEXT_PUBLIC_API_MOCKING=enabled pnpm stack:up` to serve the MSW mocks
 instead. Images are tagged `${BBM_REGISTRY:-bbm}/<svc>:${BBM_TAG:-local}`.
 
+### Live analysis pipeline
+
+Runs Slither + LLM analysis and the PoC sandbox for real (design:
+[analysis pipeline spec](docs/superpowers/specs/2026-10-19-analysis-pipeline-design.md)).
+The `analysis` service polls the jobs the API queues; sandbox jobs need the
+opt-in overlay, which mounts the Docker socket. For LLM explanations put
+`LLM_ENDPOINT`, `LLM_MODEL` and `LLM_API_KEY` in `workers/analysis/.env`
+(git-ignored); without them explanations fall back to Slither's text.
+
+```sh
+docker build -f workers/sandbox/Dockerfile -t bbm-sandbox:latest workers
+export DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build --wait db api analysis
+./scripts/demo-pipeline.sh     # submit -> findings -> claim -> PoC Verified / Rejected; prints DEMO OK
+
+# The web app with the pipeline routes live and everything else mocked:
+NEXT_PUBLIC_API_MOCKING=enabled NEXT_PUBLIC_LIVE_PIPELINE=enabled \
+  API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
+```
+
+PoCs are Foundry tests that import the target as `import "../src/<filename>";`
+(see [workers/sandbox](workers/sandbox/README.md)).
+
+In live mode only the pipeline routes are real: upload, contract pages,
+findings, analysis status, the auditor queue, claim and PoC upload. Stake,
+the auditor profile, disputes, false-positive marking, reclaim/cancel and the
+arbiter stay mocked, so those buttons answer "not found" for real contracts
+and the profile's claimed list shows only seeded contracts; keep the demo to
+the pipeline steps.
+
 ## Testing
 
 | Tier               | Where                                                       | Command                                           |
