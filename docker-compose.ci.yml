@@ -6,6 +6,8 @@
 
 services:
   db:
+    # Replace the named data volume with tmpfs (compose >= 2.24 for !reset).
+    volumes: !reset []
     tmpfs:
       - /var/lib/postgresql/data
   api:
