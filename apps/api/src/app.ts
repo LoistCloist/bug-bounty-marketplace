@@ -7,7 +7,8 @@ import { MemorySourceStorage, type SourceStorage } from "./contracts/storage.js"
 import { loadPipelineConfig, type PipelineConfig } from "./pipeline/config.js";
 import { MemoryPipelineRepository, MemoryStore } from "./pipeline/memory-repository.js";
 import type { PipelineRepository } from "./pipeline/repository.js";
-import { registerPipelineRoutes } from "./pipeline/routes.js";
+import { registerPipelineRoutes, type AuditorStakeReader } from "./pipeline/routes.js";
+import { NotConfiguredVerdictSource, type PocVerdictSource } from "./pipeline/verdict-source.js";
 
 export interface AppOptions {
   /** Defaults to an in-memory repository. `index.ts` wires Postgres when
@@ -22,6 +23,12 @@ export interface AppOptions {
   storage?: SourceStorage;
   /** Defaults to loadPipelineConfig() (env vars, real clock). */
   config?: PipelineConfig;
+  /** Sandbox verdict source for PoC uploads. Defaults to NotConfiguredVerdictSource,
+   * which leaves every PoC Pending. */
+  verdicts?: PocVerdictSource;
+  /** AuditorStaking reader for the PoC stake gate. Omit or pass null when no
+   * chain is configured: the gate is then skipped and logged. */
+  auditorStaking?: AuditorStakeReader | null;
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -39,7 +46,14 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
 
   void app.register(multipart, { limits: CONTRACT_MULTIPART_LIMITS });
   registerContractRoutes(app, { repository, storage, now: config.now });
-  registerPipelineRoutes(app, { contracts: repository, pipeline, storage, config });
+  registerPipelineRoutes(app, {
+    contracts: repository,
+    pipeline,
+    storage,
+    config,
+    verdicts: options.verdicts ?? new NotConfiguredVerdictSource(),
+    auditorStaking: options.auditorStaking ?? null,
+  });
 
   return app;
 }

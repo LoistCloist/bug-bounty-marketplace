@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import type { AnalysisStatus, Contract, Finding } from "@bbm/shared";
+import type { AnalysisStatus, Contract, Finding, SandboxStatus } from "@bbm/shared";
 import { PgContractRepository } from "../contracts/pg-repository.js";
 import { toAnalysisJobStatus, toFinding } from "./mapping.js";
 import type { FindingRecord, JobStatus, NewPocRecord, PipelineRepository } from "./repository.js";
@@ -170,5 +170,13 @@ export class PgPipelineRepository implements PipelineRepository {
     } finally {
       client.release();
     }
+  }
+
+  async recordVerdict(pocId: string, sandboxStatus: SandboxStatus): Promise<void> {
+    const result = await this.pool.query(
+      "UPDATE poc_submissions SET sandbox_status = $2 WHERE id = $1",
+      [pocId, sandboxStatus],
+    );
+    if (result.rowCount !== 1) throw new Error(`Unknown PoC ${pocId}`);
   }
 }

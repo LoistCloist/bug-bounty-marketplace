@@ -6,6 +6,7 @@ import type {
   FindingStatus,
   FindingStatusHistoryEntry,
   PoCSubmission,
+  SandboxStatus,
 } from "@bbm/shared";
 
 export type JobKind = "analysis" | "sandbox";
@@ -62,4 +63,6 @@ export interface PipelineRepository {
    * Otherwise writes nothing and returns "no_claim" (claim missing, expired
    * or someone else's) or "not_flagged" (finding no longer Flagged). */
   submitPoc(record: NewPocRecord): Promise<"ok" | "not_flagged" | "no_claim">;
+  /** Stores a sandbox verdict on a submitted PoC. Throws if the PoC is unknown. */
+  recordVerdict(pocId: string, sandboxStatus: SandboxStatus): Promise<void>;
 }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AnalysisStatusSchema,
   ContractSchema,
@@ -13,13 +13,21 @@ import { MemorySourceStorage } from "../contracts/storage.js";
 import { multipartBody } from "../testing/http.js";
 import { makeContract, makeFinding } from "../testing/repository-suite.js";
 import { MemoryPipelineRepository, MemoryStore } from "./memory-repository.js";
+import { FixedVerdictSource } from "./verdict-source.js";
 
 const T0 = new Date("2026-10-20T12:00:00.000Z");
 const CLAIM_WINDOW_SECONDS = 600;
 const developerAddress = "0x1234567890123456789012345678901234567890";
+const auditorWallet = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const poc = Buffer.from('import "../src/Vault.sol";\ncontract PoC {}\n');
 
-function setup() {
+interface SetupOptions {
+  verdicts?: FixedVerdictSource;
+  /** Fake AuditorStaking reader. Omit to run with no chain configured. */
+  stakeOf?: (auditor: string) => Promise<bigint>;
+}
+
+function setup(options: SetupOptions = {}) {
   const store = new MemoryStore();
   const storage = new MemorySourceStorage();
   const clock = { now: T0 };
@@ -28,6 +36,8 @@ function setup() {
     pipeline: new MemoryPipelineRepository(store),
     storage,
     config: { claimWindowSeconds: CLAIM_WINDOW_SECONDS, now: () => clock.now },
+    verdicts: options.verdicts,
+    auditorStaking: options.stakeOf ? { stakeOf: options.stakeOf } : null,
   });
   const advance = (seconds: number) => {
     clock.now = new Date(clock.now.getTime() + seconds * 1000);
@@ -344,5 +354,98 @@ describe("POST /api/auditor/poc when the claim lapses mid-request", () => {
     const response = await app.inject({ method: "POST", url: "/api/auditor/poc", ...body });
     expect(response.statusCode).toBe(403);
     expect(response.json()).toEqual({ error: "You do not hold an active claim on this contract" });
+  });
+});
+
+describe("POST /api/auditor/poc verdicts and stake gate", () => {
+  async function claimedBy(ctx: ReturnType<typeof setup>, auditorId: string) {
+    const { contract } = await ctx.seedContract();
+    const finding = ctx.seedFinding(contract.id);
+    await ctx.claim(contract.id, auditorId);
+    return finding;
+  }
+
+  it("requests a verdict for the stored PoC and returns Passed", async () => {
+    const verdicts = new FixedVerdictSource("Passed");
+    const ctx = setup({ verdicts });
+    const finding = await claimedBy(ctx, "auditor_1");
+    const response = await ctx.submitPoc(
+      { findingId: finding.id, auditorId: "auditor_1" },
+      { name: "Exploit.t.sol", content: poc },
+    );
+    expect(response.statusCode).toBe(201);
+    const created = PoCSubmissionSchema.parse(response.json());
+    expect(created.sandboxStatus).toBe("Passed");
+    expect(verdicts.requested.map((p) => p.id)).toEqual([created.id]);
+    expect(ctx.store.pocs.get(created.id)?.sandboxStatus).toBe("Passed");
+  });
+
+  it("returns Failed and records it when the verdict source fails the PoC", async () => {
+    const verdicts = new FixedVerdictSource("Failed");
+    const ctx = setup({ verdicts });
+    const finding = await claimedBy(ctx, "auditor_1");
+    const response = await ctx.submitPoc(
+      { findingId: finding.id, auditorId: "auditor_1" },
+      { name: "Exploit.t.sol", content: poc },
+    );
+    expect(response.statusCode).toBe(201);
+    const created = PoCSubmissionSchema.parse(response.json());
+    expect(created.sandboxStatus).toBe("Failed");
+    expect(ctx.store.pocs.get(created.id)?.sandboxStatus).toBe("Failed");
+  });
+
+  it("rejects a stake below the requirement with 403 and stores nothing", async () => {
+    const stakeOf = vi.fn(async () => 99_999_999_999_999_999n);
+    const ctx = setup({ stakeOf });
+    const finding = await claimedBy(ctx, auditorWallet);
+    const put = vi.spyOn(ctx.storage, "put");
+    const response = await ctx.submitPoc(
+      { findingId: finding.id, auditorId: auditorWallet },
+      { name: "Exploit.t.sol", content: poc },
+    );
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "Auditor stake is below the required stake" });
+    expect(stakeOf).toHaveBeenCalledWith(auditorWallet);
+    expect(put).not.toHaveBeenCalled();
+    expect(ctx.store.pocs.size).toBe(0);
+    expect(ctx.store.findings.get(finding.id)?.status).toBe("Flagged");
+  });
+
+  it("accepts a stake equal to the requirement", async () => {
+    const ctx = setup({ stakeOf: async () => 100_000_000_000_000_000n });
+    const finding = await claimedBy(ctx, auditorWallet);
+    const response = await ctx.submitPoc(
+      { findingId: finding.id, auditorId: auditorWallet },
+      { name: "Exploit.t.sol", content: poc },
+    );
+    expect(response.statusCode).toBe(201);
+  });
+
+  it("rejects a non-address auditorId when the stake check is on, without reading stake", async () => {
+    const stakeOf = vi.fn(async () => 100_000_000_000_000_000n);
+    const ctx = setup({ stakeOf });
+    const finding = await claimedBy(ctx, "auditor_1");
+    const response = await ctx.submitPoc(
+      { findingId: finding.id, auditorId: "auditor_1" },
+      { name: "Exploit.t.sol", content: poc },
+    );
+    expect(response.statusCode).toBe(400);
+    expect(stakeOf).not.toHaveBeenCalled();
+  });
+
+  it("skips the stake check and logs it when no chain is configured", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const ctx = setup();
+      const finding = await claimedBy(ctx, "auditor_1");
+      const response = await ctx.submitPoc(
+        { findingId: finding.id, auditorId: "auditor_1" },
+        { name: "Exploit.t.sol", content: poc },
+      );
+      expect(response.statusCode).toBe(201);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("stake check skipped"));
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

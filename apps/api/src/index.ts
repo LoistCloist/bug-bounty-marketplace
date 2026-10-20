@@ -1,5 +1,9 @@
 import { Pool } from "pg";
+import { createPublicClient, createWalletClient, http } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { buildApp } from "./app.js";
+import { createAuditorStakingPort } from "./chain/auditor-staking.js";
+import { loadChainConfig } from "./chain/config.js";
 import { PgContractRepository } from "./contracts/pg-repository.js";
 import { PgPipelineRepository } from "./pipeline/pg-repository.js";
 import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
@@ -18,10 +22,27 @@ const pool = databaseUrl
   ? new Pool({ connectionString: databaseUrl, max: parseIntEnv(process.env.PG_POOL_MAX, 5) })
   : undefined;
 
+// CHAIN_RPC_URL selects the chain. Without it the PoC stake gate is skipped.
+const chain = loadChainConfig(process.env);
+if (!chain) {
+  console.warn("@bbm/api CHAIN_RPC_URL is unset: PoC uploads skip the auditor stake check");
+}
+const auditorStaking = chain
+  ? createAuditorStakingPort({
+      address: chain.auditorStakingAddress,
+      publicClient: createPublicClient({ transport: http(chain.rpcUrl) }),
+      walletClient: createWalletClient({
+        account: privateKeyToAccount(chain.operatorPrivateKey),
+        transport: http(chain.rpcUrl),
+      }),
+    })
+  : null;
+
 const app = buildApp({
   repository: pool ? new PgContractRepository(pool) : undefined,
   pipeline: pool ? new PgPipelineRepository(pool) : undefined,
   storage: storageDir ? new LocalSourceStorage(storageDir) : new MemorySourceStorage(),
+  auditorStaking,
 });
 const port = Number(process.env.PORT ?? 3001);
 
