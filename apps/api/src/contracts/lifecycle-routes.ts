@@ -3,7 +3,11 @@ import type { Contract } from "@bbm/shared";
 import { getAddress, isAddress } from "viem";
 import type { Auth } from "../auth/session.js";
 import type { ChainActions } from "../chain/actions.js";
-import { BOUNTY_STATE_CLOSED, BOUNTY_STATE_OPEN, type BountyEscrowPort } from "../chain/bounty-escrow.js";
+import {
+  BOUNTY_STATE_CLOSED,
+  BOUNTY_STATE_OPEN,
+  type BountyEscrowPort,
+} from "../chain/bounty-escrow.js";
 import { onchainId } from "../chain/ids.js";
 import { InvalidTransitionError } from "../status/transitions.js";
 import type { ContractRepository } from "./repository.js";
@@ -25,7 +29,10 @@ const END_OF_TIME = new Date(8.64e15);
  * (fund, deleteBounty, refund). Each route confirms the result on-chain before
  * changing the API's records, and is idempotent.
  */
-export function registerContractLifecycleRoutes(app: FastifyInstance, deps: ContractLifecycleDeps): void {
+export function registerContractLifecycleRoutes(
+  app: FastifyInstance,
+  deps: ContractLifecycleDeps,
+): void {
   const { contracts, bountyEscrow, auth, now } = deps;
 
   /** The contract, if the signed-in wallet is its developer; otherwise sends 401/403/404. */
@@ -40,7 +47,10 @@ export function registerContractLifecycleRoutes(app: FastifyInstance, deps: Cont
       void reply.code(404).send({ error: "Contract not found" });
       return undefined;
     }
-    if (!isAddress(contract.developerAddress) || getAddress(contract.developerAddress) !== address) {
+    if (
+      !isAddress(contract.developerAddress) ||
+      getAddress(contract.developerAddress) !== address
+    ) {
       void reply.code(403).send({ error: "only the contract's developer can do this" });
       return undefined;
     }
@@ -70,7 +80,8 @@ export function registerContractLifecycleRoutes(app: FastifyInstance, deps: Cont
       const onchain = await bountyEscrow.readBounty(onchainId(contract.id));
       if (onchain.state !== BOUNTY_STATE_CLOSED) {
         return reply.code(409).send({
-          error: action === "cancel" ? "bounty not deleted on-chain" : "bounty not refunded on-chain",
+          error:
+            action === "cancel" ? "bounty not deleted on-chain" : "bounty not refunded on-chain",
         });
       }
       // The bounty is closed, so an auditor's claim on it is moot: release the
@@ -80,13 +91,16 @@ export function registerContractLifecycleRoutes(app: FastifyInstance, deps: Cont
           await deps.chainActions.releaseExpiredLocks(END_OF_TIME, contract.id);
         } catch (err) {
           request.log.error({ err, contractId: contract.id }, "releasing the claim lock failed");
-          return reply.code(502).send({ error: "could not release the auditor's claim lock; try again" });
+          return reply
+            .code(502)
+            .send({ error: "could not release the auditor's claim lock; try again" });
         }
       }
       try {
         return await contracts.setContractStatus(contract.id, "Expired", now());
       } catch (err) {
-        if (err instanceof InvalidTransitionError) return reply.code(409).send({ error: err.message });
+        if (err instanceof InvalidTransitionError)
+          return reply.code(409).send({ error: err.message });
         throw err;
       }
     });

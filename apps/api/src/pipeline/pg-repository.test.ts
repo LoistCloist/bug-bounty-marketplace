@@ -38,6 +38,7 @@ describeRepositories(
       listContracts: (filter, now) => repo.listContracts(filter, now),
       claimContract: (...args) => repo.claimContract(...args),
       releaseClaim: (id, auditorId) => repo.releaseClaim(id, auditorId),
+      releaseClaimIfUnlocked: (id, auditorId) => repo.releaseClaimIfUnlocked(id, auditorId),
       listQueue: (now, options) => repo.listQueue(now, options),
       findActiveClaim: (id, now) => repo.findActiveClaim(id, now),
       findBounty: (id) => repo.findBounty(id),

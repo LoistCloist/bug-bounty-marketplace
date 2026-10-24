@@ -262,7 +262,7 @@ describe("disputes", () => {
   });
 
   it("accepts the arbiter's ruling when the indexer already recorded the same outcome", async () => {
-    const { app, seed, openOnChain, disputes } = setup();
+    const { app, seed, openOnChain, disputes, chainActions } = setup();
     const { contractId, findingId } = await seed("Verified");
     openOnChain(contractId, findingId);
     const dev = await signIn(app, DEVELOPER);
@@ -286,6 +286,8 @@ describe("disputes", () => {
     });
     expect(ruled.statusCode).toBe(200);
     expect(ruled.json()).toMatchObject({ id: disputeId, ruling: "AgainstAuditor" });
+    // The API still retries the stake unlock, in case the indexer's attempt failed.
+    expect(chainActions.applyDisputeResolved).toHaveBeenCalledWith(findingId);
   });
 
   it("a ruling for the auditor returns the finding to Verified with a new window", async () => {

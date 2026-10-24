@@ -64,4 +64,46 @@ describe.skipIf(!databaseUrl)("PgContractRepository", () => {
   it("returns null for an unknown id", async () => {
     expect(await repository.findContractById("contract_does_not_exist")).toBeNull();
   });
+  it("releaseClaimIfUnlocked ends only the given auditor's claim, and never one with a held lock", async () => {
+    const auditor = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
+    const claim = (lock: string | null) =>
+      pool.query(
+        `UPDATE contracts SET status = 'Claimed', claimed_by_auditor_id = $2,
+                claim_expires_at = now() + interval '10 minutes', claim_lock_status = $3
+          WHERE id = $1`,
+        [contractId, auditor, lock],
+      );
+    const row = async () =>
+      (
+        await pool.query<{
+          status: string;
+          claimed_by_auditor_id: string | null;
+          claim_lock_status: string | null;
+        }>("SELECT status, claimed_by_auditor_id, claim_lock_status FROM contracts WHERE id = $1", [
+          contractId,
+        ])
+      ).rows[0];
+
+    await claim("locked");
+    await repository.releaseClaimIfUnlocked(contractId, auditor);
+    expect(await row()).toMatchObject({
+      status: "Claimed",
+      claimed_by_auditor_id: auditor,
+      claim_lock_status: "locked",
+    });
+
+    await claim("released");
+    await repository.releaseClaimIfUnlocked(
+      contractId,
+      "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+    );
+    expect((await row())?.status).toBe("Claimed");
+
+    await repository.releaseClaimIfUnlocked(contractId, auditor.toLowerCase());
+    expect(await row()).toMatchObject({
+      status: "Open",
+      claimed_by_auditor_id: null,
+      claim_lock_status: null,
+    });
+  });
 });

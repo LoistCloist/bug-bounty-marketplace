@@ -169,8 +169,18 @@ export function registerFindingLifecycleRoutes(
       }
       const dispute = await disputes.findById(request.params.id);
       if (!dispute) return reply.code(404).send({ error: "Dispute not found" });
-      // The indexer may record the on-chain outcome first; the same ruling again is a no-op.
-      if (dispute.ruling === ruling) return dispute;
+      // The indexer may record the on-chain outcome first; the same ruling again
+      // succeeds, and still retries the stake unlock (idempotent) in case the
+      // indexer's attempt failed.
+      if (dispute.ruling === ruling) {
+        await deps.chainActions?.applyDisputeResolved(dispute.findingId).catch((err: unknown) => {
+          request.log.error(
+            { err, findingId: dispute.findingId },
+            "applyDisputeResolved failed; the expiry sweep will release it",
+          );
+        });
+        return dispute;
+      }
       if (dispute.ruling !== "Pending")
         return reply.code(409).send({ error: "Dispute already ruled" });
       const finding = await pipeline.findFinding(dispute.findingId, now());
@@ -183,11 +193,9 @@ export function registerFindingLifecycleRoutes(
       const bounty = await bountyEscrow.readBounty(contractKey);
       const auditorWon = bounty.verifiedFinding.toLowerCase() === findingKey.toLowerCase();
       if ((ruling === "ForAuditor") !== auditorWon) {
-        return reply
-          .code(409)
-          .send({
-            error: `the on-chain ruling was ${auditorWon ? "ForAuditor" : "AgainstAuditor"}`,
-          });
+        return reply.code(409).send({
+          error: `the on-chain ruling was ${auditorWon ? "ForAuditor" : "AgainstAuditor"}`,
+        });
       }
 
       const ruled: Dispute | null = await disputes.setRuling(dispute.id, ruling, arbiter, now());

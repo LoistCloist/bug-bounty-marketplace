@@ -35,23 +35,24 @@ export function disputeSettler(
 }
 
 /**
- * Ends the auditor's claim when a dispute rejects their finding: nothing more
- * can happen under that claim, so the bounty goes back to the queue and the
- * auditor may claim another one instead of waiting for the claim to expire.
- * Runs after the claim lock is released (the claim columns stay while an
- * unlock is still pending).
+ * Ends the claim of the auditor whose finding a dispute rejected: the bounty
+ * goes back to the queue and they may claim another one instead of waiting for
+ * the claim to expire. Only that auditor's claim ends (theirs may have expired
+ * and someone else claimed the contract since), and only once its stake lock
+ * is free or released, so a lock the unlock sweep still has to release is never
+ * lost. Runs after the claim lock release hook.
  */
 export function rejectedClaimEnder(deps: {
-  contracts: Pick<ContractRepository, "findActiveClaim" | "releaseClaim">;
-  pipeline: Pick<PipelineRepository, "findFinding">;
+  contracts: Pick<ContractRepository, "releaseClaimIfUnlocked">;
+  pipeline: Pick<PipelineRepository, "findFinding" | "findLatestPoc">;
   now: () => Date;
 }): StatusHook {
   return async (findingId, status, eventName) => {
     if (eventName !== "Unfrozen" || status !== "Rejected") return;
     const finding = await deps.pipeline.findFinding(findingId, deps.now());
-    if (!finding) return;
-    const claim = await deps.contracts.findActiveClaim(finding.contractId, deps.now());
-    if (claim) await deps.contracts.releaseClaim(finding.contractId, claim.auditorId);
+    const poc = await deps.pipeline.findLatestPoc(findingId);
+    if (!finding || !poc) return;
+    await deps.contracts.releaseClaimIfUnlocked(finding.contractId, poc.auditorId);
   };
 }
 

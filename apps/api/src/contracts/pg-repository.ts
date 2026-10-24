@@ -212,6 +212,17 @@ export class PgContractRepository implements ContractRepository {
     );
   }
 
+  async releaseClaimIfUnlocked(contractId: string, auditorId: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE contracts
+          SET status = 'Open', claim_expires_at = NULL, claimed_by_auditor_id = NULL,
+              claim_lock_status = NULL, claim_lock_before = NULL
+        WHERE id = $1 AND status = 'Claimed' AND lower(claimed_by_auditor_id) = lower($2)
+          AND (claim_lock_status IS NULL OR claim_lock_status = 'released')`,
+      [contractId, auditorId],
+    );
+  }
+
   async listQueue(now: Date, options: { fundedOnly?: boolean } = {}): Promise<QueueItem[]> {
     // Same eligibility as claimContract: a contract with a pending or held lock
     // state is not claimable, so it is not listed either.
@@ -247,9 +258,10 @@ export class PgContractRepository implements ContractRepository {
       currency: string;
       funded_at: Date;
       deadline: Date;
-    }>("SELECT id, contract_id, amount, currency, funded_at, deadline FROM bounties WHERE contract_id = $1", [
-      contractId,
-    ]);
+    }>(
+      "SELECT id, contract_id, amount, currency, funded_at, deadline FROM bounties WHERE contract_id = $1",
+      [contractId],
+    );
     const row = result.rows[0];
     if (!row) return null;
     return {
@@ -287,7 +299,11 @@ export class PgContractRepository implements ContractRepository {
     );
   }
 
-  async setContractStatus(contractId: string, next: ContractStatus, now: Date = new Date()): Promise<Contract | null> {
+  async setContractStatus(
+    contractId: string,
+    next: ContractStatus,
+    now: Date = new Date(),
+  ): Promise<Contract | null> {
     const current = await this.findContractById(contractId, now);
     if (!current) return null;
     if (current.status === next) return current;

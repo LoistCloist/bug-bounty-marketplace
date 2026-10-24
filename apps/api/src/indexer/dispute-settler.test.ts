@@ -56,19 +56,31 @@ describe("disputeSettler", () => {
 });
 
 const AUDITOR = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
+const OTHER_AUDITOR = "0x90F79bf6EB2c4f870365E785982E1f101E93b906";
 
-async function claimedContractWithFinding() {
+/** A contract claimed by `claimant`, with a Rejected finding whose PoC came from `prover`. */
+async function claimedContractWithFinding(claimant = AUDITOR, prover = AUDITOR) {
   const store = new MemoryStore();
   const contracts = new MemoryContractRepository(store);
   const pipeline = new MemoryPipelineRepository(store);
   const record = makeContract();
   await contracts.insertContract(record);
-  await contracts.claimContract(record.contract.id, AUDITOR, new Date(AT.getTime() + 600_000), AT);
+  await contracts.claimContract(record.contract.id, claimant, new Date(AT.getTime() + 600_000), AT);
   const finding = makeFinding(record.contract.id, { status: "Rejected" });
   store.findings.set(finding.id, finding);
+  store.pocs.set(`poc_${finding.id}`, {
+    id: `poc_${finding.id}`,
+    findingId: finding.id,
+    auditorId: prover,
+    testFileReference: "pocs/p/x.t.sol",
+    submittedAt: AT.toISOString(),
+    sandboxStatus: "Passed",
+    sandboxLog: null,
+  } as never);
   const other = makeContract();
   await contracts.insertContract(other);
   return {
+    store,
     contracts,
     pipeline,
     contractId: record.contract.id,
@@ -99,6 +111,36 @@ describe("rejectedClaimEnder", () => {
     await end(findingId, "Verified", "Unfrozen");
     await end(findingId, "Rejected", "FindingRejected");
     expect(await contracts.findActiveClaim(contractId, AT)).toMatchObject({ auditorId: AUDITOR });
+  });
+});
+
+describe("rejectedClaimEnder safety", () => {
+  it("leaves another auditor's claim alone (the rejected auditor's claim expired and someone else claimed)", async () => {
+    const { contracts, pipeline, contractId, findingId } = await claimedContractWithFinding(
+      OTHER_AUDITOR,
+      AUDITOR,
+    );
+    await rejectedClaimEnder({ contracts, pipeline, now: () => AT })(
+      findingId,
+      "Rejected",
+      "Unfrozen",
+    );
+    expect(await contracts.findActiveClaim(contractId, AT)).toMatchObject({
+      auditorId: OTHER_AUDITOR,
+    });
+  });
+
+  it("leaves a claim whose stake is still locked on-chain, so the unlock sweep can still find it", async () => {
+    const { store, contracts, pipeline, contractId, findingId } =
+      await claimedContractWithFinding();
+    store.contracts.get(contractId)!.claimLock = "locked";
+    await rejectedClaimEnder({ contracts, pipeline, now: () => AT })(
+      findingId,
+      "Rejected",
+      "Unfrozen",
+    );
+    expect(await contracts.findActiveClaim(contractId, AT)).toMatchObject({ auditorId: AUDITOR });
+    expect(store.contracts.get(contractId)!.claimLock).toBe("locked");
   });
 });
 
