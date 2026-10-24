@@ -43,12 +43,38 @@ export interface TxClient {
 /** BountyEscrow.BountyState, in the contract's order. */
 const BOUNTY_STATE = { None: 0, Open: 1, Paid: 2, Closed: 3 } as const;
 
-/** A user transaction that reverted or could not be sent. `message` is the
- * contract's error name or viem's short message, for the UI. */
+/** Plain-English text for the contracts' custom errors users can hit. */
+const READABLE_REVERTS: Record<string, string> = {
+  PastDeadline: "The deadline has already passed on the chain. Pick a later deadline.",
+  BountyExists: "This contract already has a bounty on-chain.",
+  BountyNotOpen: "This bounty is no longer open on-chain.",
+  HasSubmissions: "This bounty already has a PoC submission, so it can’t be cancelled.",
+  FrozenBounty: "This bounty is frozen by an open dispute.",
+  AlreadyVerified: "A finding on this bounty is already verified, so it can’t be refunded.",
+  RefundNotDue:
+    "The refund isn’t available yet: it opens shortly after the deadline. Try again in a minute.",
+  NotDeveloper: "Only the developer who funded this bounty can do that.",
+  NotArbiter: "Only the arbiter can rule on disputes.",
+  ChallengeWindowClosed:
+    "The challenge window has closed, so this finding can no longer be disputed.",
+  DisputeNotFound: "There is no open dispute on-chain for this finding.",
+  RulingWindowClosed: "The ruling window for this dispute has closed.",
+  NothingToWithdraw: "There is no payout to withdraw.",
+  InsufficientStake: "Your stake is below the amount this action needs.",
+  ActiveSubmissions: "Your stake is locked by an active claim.",
+  ZeroAmount: "Enter an amount greater than zero.",
+};
+
+/** A user transaction that reverted or could not be sent. `reason` is the
+ * contract's error name or viem's short message; `message` is readable text
+ * for the UI. */
 export class ChainTxError extends Error {
-  constructor(message: string) {
-    super(message);
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(READABLE_REVERTS[reason] ?? reason);
     this.name = "ChainTxError";
+    this.reason = reason;
   }
 }
 
@@ -141,7 +167,7 @@ export function chainCalls(
     try {
       await client.simulate(request);
     } catch (err) {
-      if (err instanceof ChainTxError && doneErrors.includes(err.message) && (await isDone()))
+      if (err instanceof ChainTxError && doneErrors.includes(err.reason) && (await isDone()))
         return null;
       throw err;
     }

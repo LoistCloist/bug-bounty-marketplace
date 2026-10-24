@@ -107,6 +107,17 @@ export class MemoryContractRepository implements ContractRepository {
     }
   }
 
+  async releaseClaimIfUnlocked(contractId: string, auditorId: string): Promise<void> {
+    const stored = this.store.contracts.get(contractId);
+    if (!stored || stored.contract.status !== "Claimed" || !lockIsFree(stored.claimLock)) return;
+    if (stored.claimedByAuditorId?.toLowerCase() !== auditorId.toLowerCase()) return;
+    stored.contract.status = "Open";
+    stored.claimExpiresAt = null;
+    stored.claimedByAuditorId = null;
+    stored.claimLock = null;
+    stored.claimLockBefore = null;
+  }
+
   async listQueue(now: Date, options: { fundedOnly?: boolean } = {}): Promise<QueueItem[]> {
     const items: QueueItem[] = [];
     for (const stored of this.store.contracts.values()) {
@@ -142,15 +153,21 @@ export class MemoryContractRepository implements ContractRepository {
   }
 
   async markFunded(contractId: string, at: Date): Promise<void> {
-    if (!this.store.onchainFunded.has(contractId)) this.store.onchainFunded.set(contractId, at.toISOString());
+    if (!this.store.onchainFunded.has(contractId))
+      this.store.onchainFunded.set(contractId, at.toISOString());
   }
 
-  async setContractStatus(contractId: string, next: ContractStatus, now: Date = new Date()): Promise<Contract | null> {
+  async setContractStatus(
+    contractId: string,
+    next: ContractStatus,
+    now: Date = new Date(),
+  ): Promise<Contract | null> {
     const stored = this.store.contracts.get(contractId);
     if (!stored) return null;
     const current = this.store.view(stored, now).status;
     if (current === next) return this.store.view(stored, now);
-    if (!canTransitionContract(current, next)) throw new InvalidTransitionError("contract", current, next);
+    if (!canTransitionContract(current, next))
+      throw new InvalidTransitionError("contract", current, next);
     stored.contract = { ...stored.contract, status: next };
     // A held lock keeps its holder and expiry, so the unlock sweep can still
     // release the auditor's stake.

@@ -13,6 +13,12 @@ import { startPayoutKeeper, type PayoutKeeper } from "./chain/payout-keeper.js";
 import { runVerdictsOnce, startVerdictLoop } from "./chain/verdict-loop.js";
 import { startEventIndexer, type EventIndexerHandle } from "./indexer/indexer.js";
 import { PgIndexerLock, PgIndexerRepository, listFindingIds } from "./indexer/pg-repository.js";
+import { claimLockReleaser } from "./indexer/claim-lock-release.js";
+import {
+  composeStatusHooks,
+  disputeSettler,
+  rejectedClaimEnder,
+} from "./indexer/dispute-settler.js";
 import { PgContractRepository } from "./contracts/pg-repository.js";
 import { PgPipelineRepository } from "./pipeline/pg-repository.js";
 import { LocalSourceStorage, MemorySourceStorage } from "./contracts/storage.js";
@@ -49,7 +55,9 @@ if (chainConfig && !pool) {
 // session secret.
 const sessionSecret = process.env.SESSION_SECRET || undefined;
 if (chainConfig && (!sessionSecret || sessionSecret.length < 16)) {
-  throw new Error("CHAIN_RPC_URL is set but SESSION_SECRET is missing or shorter than 16 characters (needed for wallet sign-in)");
+  throw new Error(
+    "CHAIN_RPC_URL is set but SESSION_SECRET is missing or shorter than 16 characters (needed for wallet sign-in)",
+  );
 }
 const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
 const lockEnabled = claimLockEnabled(process.env);
@@ -68,9 +76,13 @@ const chainActions: ChainActions | undefined =
       })
     : undefined;
 
+const contractRepository = pool ? new PgContractRepository(pool) : undefined;
+const pipelineRepository = pool ? new PgPipelineRepository(pool) : undefined;
+const disputeRepository = pool ? new PgDisputeRepository(pool) : undefined;
+
 const app = buildApp({
-  repository: pool ? new PgContractRepository(pool) : undefined,
-  pipeline: pool ? new PgPipelineRepository(pool) : undefined,
+  repository: contractRepository,
+  pipeline: pipelineRepository,
   storage: storageDir ? new LocalSourceStorage(storageDir) : new MemorySourceStorage(),
   // The PoC stake gate reads stake regardless of CLAIM_LOCK_ENABLED.
   stakeReader: stakingPort,
@@ -80,7 +92,7 @@ const app = buildApp({
   bountyEscrow: bountyEscrowPort,
   disputeResolution: chainConfig ? createDisputeResolutionFromConfig(chainConfig) : undefined,
   auditorStaking: stakingPort ?? undefined,
-  disputes: pool ? new PgDisputeRepository(pool) : undefined,
+  disputes: disputeRepository,
   findingStatus: actionStore,
 });
 
@@ -101,26 +113,43 @@ async function start(): Promise<void> {
   }
   await app.listen({ port, host: "0.0.0.0" });
   console.log(`@bbm/api listening on port ${port}`);
-  if (chainActions && pool && chainConfig) {
+  if (
+    chainActions &&
+    pool &&
+    chainConfig &&
+    contractRepository &&
+    pipelineRepository &&
+    disputeRepository
+  ) {
     const db = pool;
     indexer = startEventIndexer({
       config: chainConfig,
       repository: new PgIndexerRepository(db),
-      findingStatus: new PgChainActionStore(db, { challengeWindowSeconds: chainConfig.challengeWindowSeconds }),
+      findingStatus: new PgChainActionStore(db, {
+        challengeWindowSeconds: chainConfig.challengeWindowSeconds,
+      }),
       listFindingIds: () => listFindingIds(db),
       lock: new PgIndexerLock(db),
       pollIntervalMs: parseIntEnv(process.env.INDEXER_POLL_MS, 5000),
-      // A resolved dispute (Unfrozen) releases the auditor's claim lock once.
-      onStatusApplied: async (findingId, _status, eventName) => {
-        if (eventName === "Unfrozen") await chainActions.applyDisputeResolved(findingId);
-      },
+      // A payout or a resolved dispute releases the auditor's claim lock once;
+      // a dispute that ended on-chain is recorded, and a lost one ends the claim.
+      onStatusApplied: composeStatusHooks(
+        claimLockReleaser(chainActions),
+        disputeSettler(disputeRepository, chainConfig.arbiterAddress, () => new Date()),
+        rejectedClaimEnder({
+          contracts: contractRepository,
+          pipeline: pipelineRepository,
+          now: () => new Date(),
+        }),
+      ),
     });
-    const pipeline = new PgPipelineRepository(pool);
+    const pipeline = pipelineRepository;
     verdictLoop = startVerdictLoop({
       intervalMs: parseIntEnv(process.env.VERDICT_INTERVAL_MS, 2000),
       runOnce: async () => {
         const summary = await runVerdictsOnce({ pipeline, chainActions });
-        if (summary.applied + summary.failed > 0) console.log(`@bbm/api verdict pass: ${JSON.stringify(summary)}`);
+        if (summary.applied + summary.failed > 0)
+          console.log(`@bbm/api verdict pass: ${JSON.stringify(summary)}`);
       },
       onError: (err) => console.error("@bbm/api verdict pass failed", err),
     });
@@ -155,7 +184,9 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   shuttingDown = true;
   console.log(`@bbm/api received ${signal}, shutting down`);
   setTimeout(() => {
-    console.error(`@bbm/api shutdown did not finish within ${SHUTDOWN_TIMEOUT_MS} ms, forcing exit`);
+    console.error(
+      `@bbm/api shutdown did not finish within ${SHUTDOWN_TIMEOUT_MS} ms, forcing exit`,
+    );
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS).unref();
   try {

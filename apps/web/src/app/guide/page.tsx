@@ -3,6 +3,38 @@ import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { useRoleStore } from "@/lib/role/store";
 import { isLocalChain, useChainInfo } from "@/lib/chain/config";
+import { weiToEth } from "@/lib/money";
+
+/** Steps on the local chain, where analysis, the sandbox and payouts are real. */
+function chainGuides(stakeEth: string, windowSeconds: number) {
+  return [
+    {
+      ...guides[0],
+      steps: [
+        "Upload a .sol file up to 100 KB, choose a bounty and a future deadline, and fund it from your developer account.",
+        "Open the contract: Slither findings with AI explanations appear in under a minute. Explanations are advisory.",
+        `When a PoC is verified you have ${windowSeconds} seconds to dispute it on-chain; otherwise the bounty is paid out.`,
+      ],
+    },
+    {
+      ...guides[1],
+      steps: [
+        "Claim an open, funded contract exclusively for 10 minutes. You hold one claim at a time.",
+        `Stake ${stakeEth} ETH from your auditor account to unlock PoC uploads.`,
+        "Upload a Foundry .t.sol test that imports the target as ../src/<filename>. It runs in an isolated sandbox; a passing test verifies the finding.",
+      ],
+    },
+    {
+      ...guides[2],
+      steps: [
+        "Open a pending dispute and read the developer’s reason alongside the original finding.",
+        "Check the proof of concept and the sandbox result.",
+        "Rule for the auditor to release the payout, or against them to reject the finding and slash half their stake.",
+      ],
+    },
+  ];
+}
+
 const guides = [
   {
     role: "developer",
@@ -44,6 +76,10 @@ const guides = [
 export default function GuidePage() {
   const chainInfo = useChainInfo();
   const setRole = useRoleStore((s) => s.setRole);
+  const onChain = isLocalChain(chainInfo);
+  const shown = onChain
+    ? chainGuides(weiToEth(chainInfo.requiredStakeWei), chainInfo.challengeWindowSeconds)
+    : guides;
   return (
     <div>
       <div className="page-heading">
@@ -53,15 +89,16 @@ export default function GuidePage() {
           <p>Walk through the complete bounty lifecycle with the frontend demo.</p>
           {isLocalChain(chainInfo) ? (
             <p className="mt-2 text-emerald-300">
-              Running on a local test chain: findings appear in under a minute, auditors stake 0.1 ETH,
-              the challenge window is {chainInfo.challengeWindowSeconds} seconds, and losing a dispute
-              slashes half the auditor&apos;s stake. No real funds are involved.
+              Running on a local test chain: findings appear in under a minute, auditors stake{" "}
+              {weiToEth(chainInfo.requiredStakeWei)} ETH, the challenge window is{" "}
+              {chainInfo.challengeWindowSeconds} seconds, and losing a dispute slashes half the
+              auditor&apos;s stake. No real funds are involved.
             </p>
           ) : null}
         </div>
       </div>
       <div className="guide-grid">
-        {guides.map((g) => (
+        {shown.map((g) => (
           <section className="panel guide-card" key={g.role}>
             <Icon name={g.icon} size={29} />
             <p className="eyebrow mt-5">{g.role.toUpperCase()}</p>
@@ -80,21 +117,40 @@ export default function GuidePage() {
       </div>
       <section className="panel form-aside mt-6">
         <h2>About this MVP environment</h2>
-        <p>
-          This frontend uses a mock API and one identity per role. No real wallet is connected, no
-          funds move, and analysis and sandbox outcomes are fixtures. Use the role selector to move
-          between actors. Reloading the page resets the demo data and timers.
-        </p>
-        <p>
-          The sample workspace contains an open contract, an active review, and a disputed finding.
-          Real wallet authentication, private source storage, Slither, Gemini, Foundry execution,
-          and on-chain settlement require backend integration.
-        </p>
+        {onChain ? (
+          <p>
+            This app runs against the real API on a local Anvil chain. Each role signs its own
+            transactions with an Anvil test account and signs in to the API with a signed message
+            when you switch roles. Slither, the AI explanations and the Foundry sandbox run for
+            real; no real funds are involved. Data persists until the demo stack is restarted.
+          </p>
+        ) : (
+          <>
+            <p>
+              This frontend uses a mock API and one identity per role. No real wallet is connected,
+              no funds move, and analysis and sandbox outcomes are fixtures. Use the role selector
+              to move between actors. Reloading the page resets the demo data and timers.
+            </p>
+            <p>
+              The sample workspace contains an open contract, an active review, and a disputed
+              finding. Real wallet authentication, private source storage, Slither, Gemini, Foundry
+              execution, and on-chain settlement require backend integration.
+            </p>
+          </>
+        )}
         <div className="flex flex-wrap gap-3 mt-5">
-          <a className="button-secondary" href="/examples/DemoVault.sol" download>
+          <a
+            className="button-secondary"
+            href={onChain ? "/examples/Vault.sol" : "/examples/DemoVault.sol"}
+            download
+          >
             Download sample contract
           </a>
-          <a className="button-secondary" href="/examples/DemoExploit.t.sol" download>
+          <a
+            className="button-secondary"
+            href={onChain ? "/examples/VaultExploit.t.sol" : "/examples/DemoExploit.t.sol"}
+            download
+          >
             Download sample PoC
           </a>
         </div>

@@ -28,7 +28,11 @@ function setup(options: { chainActions?: unknown } = {}) {
         },
     ),
   } satisfies Pick<BountyEscrowPort, "readBounty">;
-  const app = buildApp({ sessionSecret: "s", bountyEscrow, chainActions: options.chainActions as never });
+  const app = buildApp({
+    sessionSecret: "s",
+    bountyEscrow,
+    chainActions: options.chainActions as never,
+  });
   function fundOnChain(contractId: string, state = 1, developer: Address = DEVELOPER.address) {
     bounties.set(onchainId(contractId), {
       developer,
@@ -70,7 +74,11 @@ describe("contract lifecycle routes with a chain", () => {
     const id = (await upload(dev)).json().id as string;
     fundOnChain(id);
     for (let i = 0; i < 2; i += 1) {
-      const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/contracts/${id}/funded`,
+        headers: { cookie: dev },
+      });
       expect(res.statusCode).toBe(200);
       expect(res.json().id).toBe(id);
     }
@@ -80,7 +88,11 @@ describe("contract lifecycle routes with a chain", () => {
     const { app, upload } = setup();
     const dev = await signIn(app, DEVELOPER);
     const id = (await upload(dev)).json().id as string;
-    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/funded`,
+      headers: { cookie: dev },
+    });
     expect(res.statusCode).toBe(409);
     const queue = await app.inject({ method: "GET", url: "/api/auditor/queue" });
     expect(queue.json().map((c: { id: string }) => c.id)).not.toContain(id);
@@ -91,7 +103,11 @@ describe("contract lifecycle routes with a chain", () => {
     const id = (await upload(await signIn(app, DEVELOPER))).json().id as string;
     fundOnChain(id);
     const auditor = await signIn(app, AUDITOR);
-    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: auditor } });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/funded`,
+      headers: { cookie: auditor },
+    });
     expect(res.statusCode).toBe(403);
   });
 
@@ -101,8 +117,14 @@ describe("contract lifecycle routes with a chain", () => {
     const funded = (await upload(dev)).json().id as string;
     const unfunded = (await upload(dev)).json().id as string;
     fundOnChain(funded);
-    await app.inject({ method: "POST", url: `/api/contracts/${funded}/funded`, headers: { cookie: dev } });
-    const ids = (await app.inject({ method: "GET", url: "/api/auditor/queue" })).json().map((c: { id: string }) => c.id);
+    await app.inject({
+      method: "POST",
+      url: `/api/contracts/${funded}/funded`,
+      headers: { cookie: dev },
+    });
+    const ids = (await app.inject({ method: "GET", url: "/api/auditor/queue" }))
+      .json()
+      .map((c: { id: string }) => c.id);
     expect(ids).toContain(funded);
     expect(ids).not.toContain(unfunded);
   });
@@ -113,10 +135,18 @@ describe("contract lifecycle routes with a chain", () => {
     for (const action of ["cancel", "reclaim"]) {
       const id = (await upload(dev)).json().id as string;
       fundOnChain(id, 1);
-      const open = await app.inject({ method: "POST", url: `/api/contracts/${id}/${action}`, headers: { cookie: dev } });
+      const open = await app.inject({
+        method: "POST",
+        url: `/api/contracts/${id}/${action}`,
+        headers: { cookie: dev },
+      });
       expect(open.statusCode).toBe(409);
       fundOnChain(id, 3);
-      const closed = await app.inject({ method: "POST", url: `/api/contracts/${id}/${action}`, headers: { cookie: dev } });
+      const closed = await app.inject({
+        method: "POST",
+        url: `/api/contracts/${id}/${action}`,
+        headers: { cookie: dev },
+      });
       expect(closed.statusCode).toBe(200);
       expect(closed.json().status).toBe("Expired");
     }
@@ -127,7 +157,11 @@ describe("contract lifecycle routes with a chain", () => {
     const dev = await signIn(app, DEVELOPER);
     const id = (await upload(dev)).json().id as string;
     fundOnChain(id);
-    await app.inject({ method: "POST", url: `/api/contracts/${id}/funded`, headers: { cookie: dev } });
+    await app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/funded`,
+      headers: { cookie: dev },
+    });
     const auditor = await signIn(app, AUDITOR);
     const wrong = await app.inject({
       method: "POST",
@@ -136,7 +170,11 @@ describe("contract lifecycle routes with a chain", () => {
       payload: { contractId: id, auditorId: DEVELOPER.address },
     });
     expect(wrong.statusCode).toBe(403);
-    const noSession = await app.inject({ method: "POST", url: "/api/auditor/claim", payload: { contractId: id } });
+    const noSession = await app.inject({
+      method: "POST",
+      url: "/api/auditor/claim",
+      payload: { contractId: id },
+    });
     expect(noSession.statusCode).toBe(401);
     const ok = await app.inject({
       method: "POST",
@@ -171,7 +209,11 @@ describe("review fixes", () => {
     const dev = await signIn(app, DEVELOPER);
     const id = (await upload(dev)).json().id as string;
     fundOnChain(id, 3);
-    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/cancel`, headers: { cookie: dev } });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/cancel`,
+      headers: { cookie: dev },
+    });
     expect(res.statusCode).toBe(200);
     expect(chainActions.releaseExpiredLocks).toHaveBeenCalledWith(expect.any(Date), id);
     const [at] = chainActions.releaseExpiredLocks.mock.calls[0] as unknown as [Date];
@@ -189,7 +231,11 @@ describe("review fixes", () => {
     const dev = await signIn(app, DEVELOPER);
     const id = (await upload(dev)).json().id as string;
     fundOnChain(id, 3);
-    const res = await app.inject({ method: "POST", url: `/api/contracts/${id}/reclaim`, headers: { cookie: dev } });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/contracts/${id}/reclaim`,
+      headers: { cookie: dev },
+    });
     expect(res.statusCode).toBe(502);
     const contract = await app.inject({ method: "GET", url: `/api/contracts/${id}` });
     expect(contract.json().status).toBe("Open");
@@ -201,7 +247,12 @@ describe("review fixes", () => {
       { findingId: "finding_x", auditorId: DEVELOPER.address },
       { name: "PoC.t.sol", content: Buffer.from("contract T {}") },
     );
-    const none = await app.inject({ method: "POST", url: "/api/auditor/poc", headers: form.headers, payload: form.payload });
+    const none = await app.inject({
+      method: "POST",
+      url: "/api/auditor/poc",
+      headers: form.headers,
+      payload: form.payload,
+    });
     expect(none.statusCode).toBe(401);
     const other = await app.inject({
       method: "POST",

@@ -8,6 +8,7 @@ import type { OnchainDispute } from "../chain/dispute-resolution.js";
 import { onchainId } from "../chain/ids.js";
 import { MemoryChainActionStore } from "../chain/memory-action-store.js";
 import { MemoryContractRepository } from "../contracts/memory-repository.js";
+import { MemoryDisputeRepository } from "./memory-repository.js";
 import { MemoryPipelineRepository, MemoryStore } from "../pipeline/memory-repository.js";
 import { makeContract, makeFinding } from "../testing/repository-suite.js";
 import { ARBITER, AUDITOR, DEVELOPER, signIn } from "../testing/session.js";
@@ -35,25 +36,27 @@ function setup() {
   const disputesOnChain = new Map<string, OnchainDispute>();
   let verifiedFinding: Hex = ZERO;
   const bountyEscrow = {
-    readBounty: vi.fn(
-      async (): Promise<OnchainBounty> => ({
-        developer: DEVELOPER.address,
-        amount: 0n,
-        deadline: 0n,
-        state: 1,
-        submissionCount: 1n,
-        verifiedFinding,
-        verifiedAuditor: AUDITOR.address,
-        frozen: false,
-      }),
-    ),
+    readBounty: vi.fn(async (): Promise<OnchainBounty> => ({
+      developer: DEVELOPER.address,
+      amount: 0n,
+      deadline: 0n,
+      state: 1,
+      submissionCount: 1n,
+      verifiedFinding,
+      verifiedAuditor: AUDITOR.address,
+      frozen: false,
+    })),
     pendingPayouts: vi.fn(async () => 7n),
   } satisfies Pick<BountyEscrowPort, "readBounty" | "pendingPayouts">;
   const disputeResolution = {
     getDispute: vi.fn(async (c: Hex, f: Hex) => disputesOnChain.get(`${c}:${f}`) ?? null),
   };
-  const auditorStaking = { stakeOf: vi.fn(async () => 10n ** 17n), reputation: vi.fn(async () => 3n) };
+  const auditorStaking = {
+    stakeOf: vi.fn(async () => 10n ** 17n),
+    reputation: vi.fn(async () => 3n),
+  };
   const chainActions = { applyDisputeResolved: vi.fn(async () => true) };
+  const disputes = new MemoryDisputeRepository();
   const app = buildApp({
     repository,
     pipeline,
@@ -66,16 +69,24 @@ function setup() {
     disputeResolution,
     auditorStaking,
     chainActions: chainActions as never,
+    disputes,
   });
 
   async function seed(status: FindingStatus, claimedBy: Address | null = null) {
     const record = makeContract({ developerAddress: DEVELOPER.address });
     await repository.insertContract(record);
-    if (claimedBy) await repository.claimContract(record.contract.id, claimedBy, new Date(T0.getTime() + 600_000), T0);
+    if (claimedBy)
+      await repository.claimContract(
+        record.contract.id,
+        claimedBy,
+        new Date(T0.getTime() + 600_000),
+        T0,
+      );
     const finding = makeFinding(record.contract.id, {
       status,
       statusHistory: [{ status, changedAt: T0.toISOString() }],
-      challengeWindowExpiresAt: status === "Verified" ? new Date(T0.getTime() + 60_000).toISOString() : null,
+      challengeWindowExpiresAt:
+        status === "Verified" ? new Date(T0.getTime() + 60_000).toISOString() : null,
     });
     store.findings.set(finding.id, finding);
     return { contractId: record.contract.id, findingId: finding.id };
@@ -88,13 +99,25 @@ function setup() {
       resolved,
     });
   }
-  return { app, store, seed, openOnChain, chainActions, setVerified: (f: string) => (verifiedFinding = onchainId(f)) };
+  return {
+    app,
+    store,
+    disputes,
+    seed,
+    openOnChain,
+    chainActions,
+    setVerified: (f: string) => (verifiedFinding = onchainId(f)),
+  };
 }
 
 describe("auditor profile", () => {
   it("reads stake, reputation and pending payout from the chain for the signed-in auditor", async () => {
     const { app } = setup();
-    const res = await app.inject({ method: "GET", url: "/api/auditor/profile", headers: { cookie: await signIn(app, AUDITOR) } });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/auditor/profile",
+      headers: { cookie: await signIn(app, AUDITOR) },
+    });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       id: AUDITOR.address,
@@ -169,7 +192,11 @@ describe("disputes", () => {
     expect(first.statusCode).toBe(201);
     expect(second.statusCode).toBe(201);
     expect(second.json().id).toBe(first.json().id);
-    expect(first.json()).toMatchObject({ findingId, developerId: DEVELOPER.address, ruling: "Pending" });
+    expect(first.json()).toMatchObject({
+      findingId,
+      developerId: DEVELOPER.address,
+      ruling: "Pending",
+    });
     const finding = store.findings.get(findingId)!;
     expect(finding.status).toBe("Disputed");
     expect(finding.statusHistory.filter((h) => h.status === "Disputed")).toHaveLength(1);
@@ -201,15 +228,27 @@ describe("disputes", () => {
     });
     const disputeId = opened.json().id as string;
 
-    expect((await app.inject({ method: "GET", url: "/api/arbiter/disputes", headers: { cookie: dev } })).statusCode).toBe(403);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/arbiter/disputes", headers: { cookie: dev } }))
+        .statusCode,
+    ).toBe(403);
     const arbiter = await signIn(app, ARBITER);
-    const list = await app.inject({ method: "GET", url: "/api/arbiter/disputes?ruling=Pending", headers: { cookie: arbiter } });
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/arbiter/disputes?ruling=Pending",
+      headers: { cookie: arbiter },
+    });
     expect(list.statusCode).toBe(200);
     expect(list.json()).toHaveLength(1);
     expect(list.json()[0]).toMatchObject({ id: disputeId, finding: { id: findingId } });
 
     const rule = (ruling: string) =>
-      app.inject({ method: "POST", url: `/api/arbiter/disputes/${disputeId}/rule`, headers: { cookie: arbiter }, payload: { ruling } });
+      app.inject({
+        method: "POST",
+        url: `/api/arbiter/disputes/${disputeId}/rule`,
+        headers: { cookie: arbiter },
+        payload: { ruling },
+      });
     expect((await rule("AgainstAuditor")).statusCode).toBe(409); // not ruled on-chain yet
     openOnChain(contractId, findingId, true); // ruled; escrow verification cleared → auditor lost
     expect((await rule("ForAuditor")).statusCode).toBe(409); // escrow says the auditor lost
@@ -218,7 +257,37 @@ describe("disputes", () => {
     expect(ruled.json()).toMatchObject({ ruling: "AgainstAuditor", arbiterId: ARBITER.address });
     expect(store.findings.get(findingId)?.status).toBe("Rejected");
     expect(chainActions.applyDisputeResolved).toHaveBeenCalledWith(findingId);
-    expect((await rule("AgainstAuditor")).statusCode).toBe(409); // already ruled
+    expect((await rule("AgainstAuditor")).statusCode).toBe(200); // repeating the recorded outcome is idempotent
+    expect((await rule("ForAuditor")).statusCode).toBe(409); // contradicts the recorded ruling
+  });
+
+  it("accepts the arbiter's ruling when the indexer already recorded the same outcome", async () => {
+    const { app, seed, openOnChain, disputes, chainActions } = setup();
+    const { contractId, findingId } = await seed("Verified");
+    openOnChain(contractId, findingId);
+    const dev = await signIn(app, DEVELOPER);
+    const opened = await app.inject({
+      method: "POST",
+      url: `/api/findings/${findingId}/dispute`,
+      headers: { cookie: dev },
+      payload: { reason: "bad PoC" },
+    });
+    const disputeId = opened.json().id as string;
+    openOnChain(contractId, findingId, true);
+    // The indexer saw Unfrozen(auditorWon = false) before the arbiter's API call.
+    await disputes.setRuling(disputeId, "AgainstAuditor", "0xindexer", new Date());
+
+    const arbiter = await signIn(app, ARBITER);
+    const ruled = await app.inject({
+      method: "POST",
+      url: `/api/arbiter/disputes/${disputeId}/rule`,
+      headers: { cookie: arbiter },
+      payload: { ruling: "AgainstAuditor" },
+    });
+    expect(ruled.statusCode).toBe(200);
+    expect(ruled.json()).toMatchObject({ id: disputeId, ruling: "AgainstAuditor" });
+    // The API still retries the stake unlock, in case the indexer's attempt failed.
+    expect(chainActions.applyDisputeResolved).toHaveBeenCalledWith(findingId);
   });
 
   it("a ruling for the auditor returns the finding to Verified with a new window", async () => {

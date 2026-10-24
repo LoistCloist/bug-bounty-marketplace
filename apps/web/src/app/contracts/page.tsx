@@ -4,10 +4,12 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { developerApi } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
+import { isLocalChain, useChainInfo } from "@/lib/chain/config";
 import { Icon } from "@/components/Icon";
 import { StatusBadge } from "@/components/StatusBadge";
 export default function ContractsPage() {
   const wallet = useWallet();
+  const onChain = isLocalChain(useChainInfo());
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
   const query = useQuery({
@@ -68,7 +70,7 @@ export default function ContractsPage() {
         {!wallet.address ? (
           <div className="empty-state">
             <Icon name="shield" size={32} />
-            <h2>Connect your demo wallet</h2>
+            <h2>Connect your {onChain ? "wallet" : "demo wallet"}</h2>
             <p>Your contracts will appear once you connect.</p>
             <button className="button-primary" onClick={() => void wallet.connect()}>
               Connect wallet

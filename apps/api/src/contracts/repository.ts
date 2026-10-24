@@ -43,6 +43,10 @@ export interface ContractRepository {
   /** Rolls back a claim this auditor holds, reopening the contract. A no-op
    * when the auditor no longer holds it. Used when the on-chain lock fails. */
   releaseClaim(contractId: string, auditorId: string): Promise<void>;
+  /** Ends `auditorId`'s claim (the contract reads Open again) only when its
+   * stake lock is free or already released; a claim held by someone else, or
+   * with a lock still pending or held, is left alone. */
+  releaseClaimIfUnlocked(contractId: string, auditorId: string): Promise<void>;
   /** Contracts open to claim (including expired claims), with their bounty.
    * `fundedOnly` keeps only bounties confirmed funded on-chain. */
   listQueue(now: Date, options?: { fundedOnly?: boolean }): Promise<QueueItem[]>;

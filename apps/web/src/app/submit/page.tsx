@@ -161,7 +161,7 @@ export default function SubmitPage() {
               Single Solidity source file. Maximum size: 100 KB.
             </p>
             <a
-              href="/examples/DemoVault.sol"
+              href={chain ? "/examples/Vault.sol" : "/examples/DemoVault.sol"}
               download
               className="mt-2 inline-block text-xs text-emerald-400"
             >
@@ -256,7 +256,7 @@ export default function SubmitPage() {
             <strong className="text-emerald-300">01 · Automated analysis</strong>
             <br />
             {chain
-              ? "Slither findings appear in under a minute, with plain-language explanations."
+              ? "Slither findings appear in under a minute, with plain-English explanations."
               : "Simulated Slither findings appear in about 3 seconds, with plain-language explanations."}
           </p>
           <p>

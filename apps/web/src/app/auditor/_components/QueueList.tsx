@@ -37,6 +37,18 @@ export function QueueList({ auditorId }: { auditorId: string }) {
     },
     onError: (err) => {
       if (err instanceof ApiError && err.status === 409) {
+        // The API says why it refused; only a taken contract means someone else won.
+        if (/already holds/i.test(err.message)) {
+          setClaimError(
+            "You already hold a claim on another contract. Finish it, or wait until it is paid, ruled on or expires.",
+          );
+          return;
+        }
+        if (/not funded/i.test(err.message)) {
+          setClaimError("This bounty isn’t funded on-chain yet. Try again in a moment.");
+          void queryClient.invalidateQueries({ queryKey: ["auditor-queue"] });
+          return;
+        }
         setClaimError("Someone else already claimed that contract. Refreshing the queue.");
         void queryClient.invalidateQueries({ queryKey: ["auditor-queue"] });
         return;
