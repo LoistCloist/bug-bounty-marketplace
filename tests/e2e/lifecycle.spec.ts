@@ -62,13 +62,8 @@ async function claimAndProve(page: Page, amountLabel: string): Promise<void> {
     .getByRole("button", { name: "Claim" })
     .click();
   await expect(page).toHaveURL(/\/auditor\/contracts\/contract_/, { timeout: 30_000 });
-  // The smallest block holding both the reentrancy-eth finding and a PoC
-  // upload is that finding's card.
-  const card = page
-    .locator("div")
-    .filter({ hasText: "reentrancy-eth" })
-    .filter({ has: page.getByLabel("PoC test file") })
-    .last();
+  // Each finding is a list item; submit on the reentrancy-eth one.
+  const card = page.getByRole("listitem").filter({ hasText: "reentrancy-eth" });
   await card
     .getByLabel("PoC test file")
     .setInputFiles(path.join(FIXTURES, "pocs", "PoC_pass.t.sol"));
