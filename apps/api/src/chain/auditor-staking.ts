@@ -5,6 +5,7 @@ import { awaitSuccess } from "./tx.js";
 /** The operator-side view of AuditorStaking the API needs. */
 export interface AuditorStakingPort {
   stakeOf(auditor: Address): Promise<bigint>;
+  reputation(auditor: Address): Promise<bigint>;
   activeSubmissions(auditor: Address): Promise<bigint>;
   lockSubmission(auditor: Address): Promise<Hash>;
   unlockSubmission(auditor: Address): Promise<Hash>;
@@ -39,6 +40,15 @@ export function createAuditorStakingPort(deps: AuditorStakingDeps): AuditorStaki
         functionName: "stakeOf",
         args: [auditor],
       }) as Promise<bigint>,
+    reputation: async (auditor) =>
+      BigInt(
+        (await publicClient.readContract({
+          address,
+          abi: auditorStakingAbi,
+          functionName: "reputation",
+          args: [auditor],
+        })) as bigint,
+      ),
     activeSubmissions: (auditor) =>
       publicClient.readContract({
         address,

@@ -338,6 +338,45 @@ export function describeRepositories(
       expect(await h.jobsFor(poc.id)).toEqual([{ kind: "sandbox", status: "queued" }]);
     });
 
+    it("markFunded, fundedOnly queue, findBounty and setContractStatus", async () => {
+      const funded = await insert();
+      const unfunded = await insert();
+      expect((await h.contracts.findBounty(funded.contract.id))?.amount).toBe(funded.bounty.amount);
+      expect(await h.contracts.isFunded(funded.contract.id)).toBe(false);
+      await h.contracts.markFunded(funded.contract.id, T0);
+      await h.contracts.markFunded(funded.contract.id, minutes(1));
+      expect(await h.contracts.isFunded(funded.contract.id)).toBe(true);
+      const queued = (await h.contracts.listQueue(T0, { fundedOnly: true })).map((c) => c.id);
+      expect(queued).toContain(funded.contract.id);
+      expect(queued).not.toContain(unfunded.contract.id);
+      expect((await h.contracts.listQueue(T0)).map((c) => c.id)).toContain(unfunded.contract.id);
+
+      expect((await h.contracts.setContractStatus(unfunded.contract.id, "Expired", T0))?.status).toBe("Expired");
+      expect((await h.contracts.setContractStatus(unfunded.contract.id, "Expired", T0))?.status).toBe("Expired");
+      await expect(h.contracts.setContractStatus(unfunded.contract.id, "Open", T0)).rejects.toThrow(/Invalid/);
+      expect(await h.contracts.setContractStatus("contract_missing", "Expired", T0)).toBeNull();
+    });
+
+    it("markFalsePositive rejects a Flagged finding once, and findLatestPoc returns the newest PoC", async () => {
+      const { contract } = await insert();
+      const flagged = makeFinding(contract.id);
+      await h.seedFinding(flagged);
+      expect(await h.pipeline.markFalsePositive(flagged.id, minutes(1).toISOString())).toBe("ok");
+      expect(await h.pipeline.markFalsePositive(flagged.id, minutes(2).toISOString())).toBe("not_flagged");
+      expect(await h.pipeline.markFalsePositive("finding_missing", minutes(2).toISOString())).toBe("not_found");
+      const stored = await h.pipeline.findFinding(flagged.id, T0);
+      expect(stored).toMatchObject({ status: "Rejected", isFalsePositive: true });
+
+      const other = makeFinding(contract.id);
+      await h.seedFinding(other);
+      expect(await h.pipeline.findLatestPoc(other.id)).toBeNull();
+      await h.contracts.claimContract(contract.id, "auditor_1", minutes(10), T0);
+      const { poc, job } = makePoc(other.id);
+      await h.pipeline.submitPoc({ poc, job, findingId: other.id, now: poc.submittedAt });
+      expect((await h.pipeline.findLatestPoc(other.id))?.id).toBe(poc.id);
+      expect(await h.contracts.listClaimedContractIds("auditor_1", T0)).toEqual([contract.id]);
+    });
+
     it("lists decided, unapplied verdicts for Submitted findings until marked applied", async () => {
       const { contract } = await insert();
       const finding = makeFinding(contract.id);

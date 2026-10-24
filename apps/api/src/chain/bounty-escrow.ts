@@ -3,10 +3,18 @@ import { bountyEscrowAbi } from "@bbm/shared";
 import { awaitSuccess } from "./tx.js";
 
 /** BountyEscrow.BountyState values, as the contract's enum encodes them. */
+export const BOUNTY_STATE_NONE = 0;
+export const BOUNTY_STATE_OPEN = 1;
 export const BOUNTY_STATE_PAID = 2;
+export const BOUNTY_STATE_CLOSED = 3;
 
 /** The fields of BountyEscrow.bounties(contractId) the API reads. */
 export interface OnchainBounty {
+  developer: Address;
+  /** Wei held for the bounty. */
+  amount: bigint;
+  /** Unix seconds. */
+  deadline: bigint;
   state: number;
   submissionCount: bigint;
   /** bytes32 zero when no finding is verified. */
@@ -85,7 +93,7 @@ export function createBountyEscrowPort(deps: BountyEscrowDeps): BountyEscrowPort
       // The public getter returns the struct's fields positionally, in the
       // order of the Bounty struct: developer, amount, deadline, state,
       // submissionCount, verifiedFinding, verifiedAuditor, verifiedAt, frozen.
-      const [, , , state, submissionCount, verifiedFinding, verifiedAuditor, , frozen] =
+      const [developer, amount, deadline, state, submissionCount, verifiedFinding, verifiedAuditor, , frozen] =
         (await publicClient.readContract({
           address,
           abi: bountyEscrowAbi,
@@ -93,6 +101,9 @@ export function createBountyEscrowPort(deps: BountyEscrowDeps): BountyEscrowPort
           args: [contractId],
         })) as readonly [Address, bigint, bigint, number, bigint, Hex, Address, bigint, boolean];
       return {
+        developer,
+        amount,
+        deadline,
         state: Number(state),
         submissionCount,
         verifiedFinding,

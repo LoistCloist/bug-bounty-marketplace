@@ -1,6 +1,11 @@
 import { Pool } from "pg";
 import { buildApp } from "./app.js";
-import { createAuditorStakingFromConfig, createBountyEscrowFromConfig } from "./chain/clients.js";
+import {
+  createAuditorStakingFromConfig,
+  createBountyEscrowFromConfig,
+  createDisputeResolutionFromConfig,
+} from "./chain/clients.js";
+import { PgDisputeRepository } from "./disputes/pg-repository.js";
 import { claimLockEnabled, loadChainConfig } from "./chain/config.js";
 import { createChainActions, type ChainActions } from "./chain/actions.js";
 import { PgChainActionStore } from "./chain/pg-action-store.js";
@@ -40,13 +45,24 @@ if (chainConfig && !pool) {
   console.warn("@bbm/api CHAIN_RPC_URL is set but DATABASE_URL is not; chain actions are disabled");
 }
 // The port is only constructed when a chain is configured; no RPC call is made here.
+// With a chain, user routes act for the signed-in wallet, so sign-in needs a
+// session secret.
+const sessionSecret = process.env.SESSION_SECRET || undefined;
+if (chainConfig && (!sessionSecret || sessionSecret.length < 16)) {
+  throw new Error("CHAIN_RPC_URL is set but SESSION_SECRET is missing or shorter than 16 characters (needed for wallet sign-in)");
+}
 const stakingPort = chainConfig ? createAuditorStakingFromConfig(chainConfig) : null;
 const lockEnabled = claimLockEnabled(process.env);
-const chainActions: ChainActions | undefined =
+const bountyEscrowPort = chainConfig ? createBountyEscrowFromConfig(chainConfig) : undefined;
+const actionStore =
   chainConfig && pool
+    ? new PgChainActionStore(pool, { challengeWindowSeconds: chainConfig.challengeWindowSeconds })
+    : undefined;
+const chainActions: ChainActions | undefined =
+  chainConfig && pool && actionStore
     ? createChainActions({
-        store: new PgChainActionStore(pool, { challengeWindowSeconds: chainConfig.challengeWindowSeconds }),
-        bountyEscrow: createBountyEscrowFromConfig(chainConfig),
+        store: actionStore,
+        bountyEscrow: bountyEscrowPort,
         auditorStaking: lockEnabled && stakingPort ? stakingPort : undefined,
         claimLockEnabled: lockEnabled,
       })
@@ -60,6 +76,12 @@ const app = buildApp({
   stakeReader: stakingPort,
   chainActions,
   chainConfig,
+  sessionSecret,
+  bountyEscrow: bountyEscrowPort,
+  disputeResolution: chainConfig ? createDisputeResolutionFromConfig(chainConfig) : undefined,
+  auditorStaking: stakingPort ?? undefined,
+  disputes: pool ? new PgDisputeRepository(pool) : undefined,
+  findingStatus: actionStore,
 });
 
 /** Runs the payout keeper only when a chain is configured. */

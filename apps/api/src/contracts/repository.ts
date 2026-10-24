@@ -1,4 +1,4 @@
-import type { Bounty, Contract, Wei } from "@bbm/shared";
+import type { Bounty, Contract, ContractStatus, Wei } from "@bbm/shared";
 import type { NewJob } from "../pipeline/repository.js";
 
 export interface NewContractRecord {
@@ -43,7 +43,19 @@ export interface ContractRepository {
   /** Rolls back a claim this auditor holds, reopening the contract. A no-op
    * when the auditor no longer holds it. Used when the on-chain lock fails. */
   releaseClaim(contractId: string, auditorId: string): Promise<void>;
-  /** Contracts open to claim (including expired claims), with their bounty. */
-  listQueue(now: Date): Promise<QueueItem[]>;
+  /** Contracts open to claim (including expired claims), with their bounty.
+   * `fundedOnly` keeps only bounties confirmed funded on-chain. */
+  listQueue(now: Date, options?: { fundedOnly?: boolean }): Promise<QueueItem[]>;
+  findBounty(contractId: string): Promise<Bounty | null>;
+  /** Ids of contracts the auditor holds an active claim on at `now`. */
+  listClaimedContractIds(auditorId: string, now: Date): Promise<string[]>;
+  /** True once the bounty is confirmed funded on-chain (markFunded). */
+  isFunded(contractId: string): Promise<boolean>;
+  /** Records that the bounty is funded on-chain. Idempotent. */
+  markFunded(contractId: string, at: Date): Promise<void>;
+  /** Moves the contract through the contract status machine. Null when the
+   * contract is unknown; same status is a no-op; an illegal move throws
+   * InvalidTransitionError. */
+  setContractStatus(contractId: string, next: ContractStatus, now?: Date): Promise<Contract | null>;
   findActiveClaim(contractId: string, now: Date): Promise<ActiveClaim | null>;
 }

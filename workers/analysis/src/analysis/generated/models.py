@@ -40,6 +40,7 @@ class AuditorProfile(BaseModel):
     stake: Annotated[str, Field(pattern="^(0|[1-9]\\d{0,77})$")]
     reputation: float
     claimedContractIds: list[ClaimedContractId]
+    pendingPayout: Annotated[str | None, Field(pattern="^(0|[1-9]\\d{0,77})$")] = None
 
 
 class Bounty(BaseModel):

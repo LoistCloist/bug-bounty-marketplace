@@ -18,6 +18,7 @@ const CHAIN_ENV = {
 function fakePort(): AuditorStakingPort {
   return {
     stakeOf: vi.fn(),
+    reputation: vi.fn(),
     activeSubmissions: vi.fn(),
     lockSubmission: vi.fn(async () => `0x${"cd".repeat(32)}` as Hash),
     unlockSubmission: vi.fn(),

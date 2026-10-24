@@ -44,6 +44,8 @@ export interface StoredJob {
 export class MemoryStore {
   readonly contracts = new Map<string, StoredContract>();
   readonly bounties = new Map<string, Bounty>();
+  /** Contract id → when its bounty was confirmed funded on-chain. */
+  readonly onchainFunded = new Map<string, string>();
   readonly findings = new Map<string, FindingRecord>();
   readonly pocs = new Map<string, PoCSubmission>();
   /** PoC id → when its verdict was applied (poc_submissions.verdict_applied_at). */
@@ -161,5 +163,22 @@ export class MemoryPipelineRepository implements PipelineRepository {
     if (!this.store.pocs.has(pocId)) throw new Error(`Unknown PoC ${pocId}`);
     if (!this.store.verdictsApplied.has(pocId))
       this.store.verdictsApplied.set(pocId, at.toISOString());
+  }
+
+  async markFalsePositive(findingId: string, changedAt: string): Promise<"ok" | "not_flagged" | "not_found"> {
+    const record = this.store.findings.get(findingId);
+    if (!record) return "not_found";
+    if (record.status !== "Flagged") return "not_flagged";
+    record.status = "Rejected";
+    record.isFalsePositive = true;
+    record.statusHistory = [...record.statusHistory, { status: "Rejected", changedAt }];
+    return "ok";
+  }
+
+  async findLatestPoc(findingId: string): Promise<PoCSubmission | null> {
+    const latest = [...this.store.pocs.values()]
+      .filter((poc) => poc.findingId === findingId)
+      .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0];
+    return latest ? { ...latest } : null;
   }
 }
