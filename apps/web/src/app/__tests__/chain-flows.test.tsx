@@ -97,7 +97,9 @@ describe("lifecycle flows on the local chain", () => {
   it("shows a failed funding transaction and does not mark the bounty funded", async () => {
     chain.fundBounty.mockRejectedValue(new ChainTxError("PastDeadline"));
     await submitVault();
-    expect(await screen.findByText(/funding the bounty failed: PastDeadline/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/funding the bounty failed: The deadline has already passed/),
+    ).toBeInTheDocument();
     expect(developerApi.markFunded).not.toHaveBeenCalled();
   });
 
@@ -177,7 +179,7 @@ describe("lifecycle flows on the local chain", () => {
   it("shows a reverted dispute and records nothing", async () => {
     chain.openDispute.mockRejectedValue(new ChainTxError("ChallengeWindowClosed"));
     await dispute();
-    expect(await screen.findByText(/ChallengeWindowClosed/)).toBeInTheDocument();
+    expect(await screen.findByText(/challenge window has closed/)).toBeInTheDocument();
     expect(developerApi.disputeFinding).not.toHaveBeenCalled();
   });
 });

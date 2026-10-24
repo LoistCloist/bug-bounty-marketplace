@@ -98,7 +98,7 @@ describe("chainCalls", () => {
     const calls = chainCalls(INFO, ANVIL_ACCOUNTS.developer, client);
     await expect(
       calls.fundBounty("contract_1", new Date("2020-01-01T00:00:00.000Z"), "1"),
-    ).rejects.toThrow("PastDeadline");
+    ).rejects.toThrow(/deadline has already passed/);
     expect(client.write).not.toHaveBeenCalled();
   });
 
@@ -167,7 +167,7 @@ describe("chainCalls", () => {
     });
     await expect(
       chainCalls(INFO, ANVIL_ACCOUNTS.developer, client).deleteBounty("contract_1"),
-    ).rejects.toThrow("BountyNotOpen");
+    ).rejects.toMatchObject({ reason: "BountyNotOpen" });
   });
 
   it("reports whether a bounty is funded on-chain", async () => {
@@ -201,3 +201,20 @@ function closedBounty(state: number): readonly unknown[] {
     false,
   ];
 }
+
+describe("ChainTxError", () => {
+  it("explains a known revert in plain English and keeps the contract's error name", () => {
+    const err = new ChainTxError("RefundNotDue");
+    expect(err.reason).toBe("RefundNotDue");
+    expect(err.message).toBe(
+      "The refund isn’t available yet: it opens shortly after the deadline. Try again in a minute.",
+    );
+    expect(new ChainTxError("PastDeadline").message).toMatch(/deadline has already passed/);
+  });
+
+  it("passes an unknown reason through unchanged", () => {
+    const err = new ChainTxError("SomethingNew");
+    expect(err.message).toBe("SomethingNew");
+    expect(err.reason).toBe("SomethingNew");
+  });
+});
