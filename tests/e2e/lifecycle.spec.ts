@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 
 /**
@@ -15,7 +16,7 @@ import { expect, test, type Page } from "@playwright/test";
  *   NEXT_PUBLIC_LIVE_CHAIN=enabled API_INTERNAL_URL=http://localhost:3001 pnpm --filter @bbm/web dev
  *   E2E_CHAIN=1 pnpm test:e2e -- lifecycle
  */
-const FIXTURES = path.resolve(process.cwd(), "../workers/analysis/tests/fixtures");
+const FIXTURES = fileURLToPath(new URL("../../workers/analysis/tests/fixtures", import.meta.url));
 
 test.skip(!process.env.E2E_CHAIN, "needs pnpm stack:demo and the web app in live chain mode");
 // One auditor account plays both tests, and an auditor holds one claim at a
@@ -61,11 +62,17 @@ async function claimAndProve(page: Page, amountLabel: string): Promise<void> {
     .getByRole("button", { name: "Claim" })
     .click();
   await expect(page).toHaveURL(/\/auditor\/contracts\/contract_/, { timeout: 30_000 });
-  await page
+  // The smallest block holding both the reentrancy-eth finding and a PoC
+  // upload is that finding's card.
+  const card = page
+    .locator("div")
+    .filter({ hasText: "reentrancy-eth" })
+    .filter({ has: page.getByLabel("PoC test file") })
+    .last();
+  await card
     .getByLabel("PoC test file")
-    .first()
     .setInputFiles(path.join(FIXTURES, "pocs", "PoC_pass.t.sol"));
-  await page.getByRole("button", { name: "Submit PoC" }).first().click();
+  await card.getByRole("button", { name: "Submit PoC" }).click();
   await expect(page.getByText("Verified", { exact: true }).first()).toBeVisible({
     timeout: 120_000,
   });
@@ -125,7 +132,9 @@ test("developer disputes within the window and the arbiter rules against the aud
     .getByRole("button", { name: /dispute this finding/i })
     .first()
     .click();
-  await page.getByLabel(/reason for dispute/i).fill("The PoC does not show a realistic attack.");
+  // A reason unique to this run identifies its dispute on the arbiter page.
+  const reason = `The PoC does not show a realistic attack (run ${Date.now()}).`;
+  await page.getByLabel(/reason for dispute/i).fill(reason);
   await page.getByRole("button", { name: /submit dispute/i }).click();
   await expect(page.getByText("Disputed", { exact: true }).first()).toBeVisible({
     timeout: 30_000,
@@ -134,10 +143,19 @@ test("developer disputes within the window and the arbiter rules against the aud
   // Arbiter: rule against the auditor.
   await switchRole(page, "Arbiter");
   await expect(page).toHaveURL(/\/arbiter$/);
-  await page.getByRole("button", { name: "Rule against auditor" }).first().click();
-  await expect(page.getByText(/AgainstAuditor|Against auditor/i).first()).toBeVisible({
-    timeout: 30_000,
-  });
+  // Wait until the API has recorded the ruling (after the on-chain rule) before
+  // switching roles, so the ruling is signed and recorded as the arbiter.
+  const ruled = page.waitForResponse(
+    (r) =>
+      /\/api\/arbiter\/disputes\/[^/]+\/rule$/.test(r.url()) && r.request().method() === "POST",
+    { timeout: 60_000 },
+  );
+  await page
+    .locator("div.rounded-lg")
+    .filter({ hasText: reason })
+    .getByRole("button", { name: "Rule against auditor" })
+    .click();
+  expect((await ruled).ok()).toBe(true);
 
   await switchRole(page, "Developer");
   await page.goto(contractUrl);
