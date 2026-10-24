@@ -10,7 +10,11 @@ import type { DisputeResolutionPort } from "../chain/dispute-resolution.js";
 import { onchainId } from "../chain/ids.js";
 import type { ContractRepository } from "../contracts/repository.js";
 import type { PipelineRepository } from "../pipeline/repository.js";
-import { applyFindingTransition, type FindingStatusReader, type FindingStatusWriter } from "../status/finding-writer.js";
+import {
+  applyFindingTransition,
+  type FindingStatusReader,
+  type FindingStatusWriter,
+} from "../status/finding-writer.js";
 import { InvalidTransitionError } from "../status/transitions.js";
 import type { DisputeRepository } from "./repository.js";
 
@@ -19,7 +23,8 @@ export interface FindingLifecycleDeps {
   pipeline: PipelineRepository;
   disputes: DisputeRepository;
   findingStatus: FindingStatusReader & FindingStatusWriter;
-  bountyEscrow: Pick<BountyEscrowPort, "readBounty"> & Partial<Pick<BountyEscrowPort, "pendingPayouts">>;
+  bountyEscrow: Pick<BountyEscrowPort, "readBounty"> &
+    Partial<Pick<BountyEscrowPort, "pendingPayouts">>;
   disputeResolution: Pick<DisputeResolutionPort, "getDispute">;
   auditorStaking: Pick<AuditorStakingPort, "stakeOf" | "reputation">;
   /** Releases the auditor's claim lock once a dispute resolves. */
@@ -36,9 +41,21 @@ export interface FindingLifecycleDeps {
  * sign on-chain first. Status moves go through the status machine, so a move
  * the indexer already made is a no-op.
  */
-export function registerFindingLifecycleRoutes(app: FastifyInstance, deps: FindingLifecycleDeps): void {
-  const { contracts, pipeline, disputes, findingStatus, bountyEscrow, disputeResolution, auditorStaking, auth, now } =
-    deps;
+export function registerFindingLifecycleRoutes(
+  app: FastifyInstance,
+  deps: FindingLifecycleDeps,
+): void {
+  const {
+    contracts,
+    pipeline,
+    disputes,
+    findingStatus,
+    bountyEscrow,
+    disputeResolution,
+    auditorStaking,
+    auth,
+    now,
+  } = deps;
 
   app.get("/api/auditor/profile", async (request, reply) => {
     const address = auth.requireSession(request, reply);
@@ -60,21 +77,27 @@ export function registerFindingLifecycleRoutes(app: FastifyInstance, deps: Findi
     return profile;
   });
 
-  app.post<{ Params: { id: string } }>("/api/findings/:id/false-positive", async (request, reply) => {
-    const address = auth.requireSession(request, reply);
-    if (!address) return reply;
-    const finding = await pipeline.findFinding(request.params.id, now());
-    if (!finding) return reply.code(404).send({ error: "Finding not found" });
-    const claim = await contracts.findActiveClaim(finding.contractId, now());
-    if (!claim || claim.auditorId.toLowerCase() !== address.toLowerCase()) {
-      return reply.code(403).send({ error: "only the auditor holding the claim can mark a false positive" });
-    }
-    const result = await pipeline.markFalsePositive(finding.id, now().toISOString());
-    if (result === "not_flagged") return reply.code(409).send({ error: "only a Flagged finding can be a false positive" });
-    if (result === "not_found") return reply.code(404).send({ error: "Finding not found" });
-    const { contract: _contract, ...updated } = (await pipeline.findFinding(finding.id, now()))!;
-    return updated;
-  });
+  app.post<{ Params: { id: string } }>(
+    "/api/findings/:id/false-positive",
+    async (request, reply) => {
+      const address = auth.requireSession(request, reply);
+      if (!address) return reply;
+      const finding = await pipeline.findFinding(request.params.id, now());
+      if (!finding) return reply.code(404).send({ error: "Finding not found" });
+      const claim = await contracts.findActiveClaim(finding.contractId, now());
+      if (!claim || claim.auditorId.toLowerCase() !== address.toLowerCase()) {
+        return reply
+          .code(403)
+          .send({ error: "only the auditor holding the claim can mark a false positive" });
+      }
+      const result = await pipeline.markFalsePositive(finding.id, now().toISOString());
+      if (result === "not_flagged")
+        return reply.code(409).send({ error: "only a Flagged finding can be a false positive" });
+      if (result === "not_found") return reply.code(404).send({ error: "Finding not found" });
+      const { contract: _contract, ...updated } = (await pipeline.findFinding(finding.id, now()))!;
+      return updated;
+    },
+  );
 
   app.post<{ Params: { id: string }; Body: { reason?: unknown } | undefined }>(
     "/api/findings/:id/dispute",
@@ -87,10 +110,16 @@ export function registerFindingLifecycleRoutes(app: FastifyInstance, deps: Findi
       }
       const finding = await pipeline.findFinding(request.params.id, now());
       if (!finding) return reply.code(404).send({ error: "Finding not found" });
-      if (!isAddress(finding.contract.developerAddress) || getAddress(finding.contract.developerAddress) !== address) {
+      if (
+        !isAddress(finding.contract.developerAddress) ||
+        getAddress(finding.contract.developerAddress) !== address
+      ) {
         return reply.code(403).send({ error: "only the contract's developer can dispute" });
       }
-      const onchain = await disputeResolution.getDispute(onchainId(finding.contractId), onchainId(finding.id));
+      const onchain = await disputeResolution.getDispute(
+        onchainId(finding.contractId),
+        onchainId(finding.id),
+      );
       if (!onchain || onchain.resolved) {
         return reply.code(409).send({ error: "no open dispute on-chain for this finding" });
       }
@@ -120,7 +149,11 @@ export function registerFindingLifecycleRoutes(app: FastifyInstance, deps: Findi
       list.map(async (dispute) => {
         const found = await pipeline.findFinding(dispute.findingId, now());
         const finding = found ? (({ contract: _c, ...rest }) => rest)(found) : null;
-        return { ...dispute, finding, pocSubmission: await pipeline.findLatestPoc(dispute.findingId) };
+        return {
+          ...dispute,
+          finding,
+          pocSubmission: await pipeline.findLatestPoc(dispute.findingId),
+        };
       }),
     );
   });
@@ -136,7 +169,10 @@ export function registerFindingLifecycleRoutes(app: FastifyInstance, deps: Findi
       }
       const dispute = await disputes.findById(request.params.id);
       if (!dispute) return reply.code(404).send({ error: "Dispute not found" });
-      if (dispute.ruling !== "Pending") return reply.code(409).send({ error: "Dispute already ruled" });
+      // The indexer may record the on-chain outcome first; the same ruling again is a no-op.
+      if (dispute.ruling === ruling) return dispute;
+      if (dispute.ruling !== "Pending")
+        return reply.code(409).send({ error: "Dispute already ruled" });
       const finding = await pipeline.findFinding(dispute.findingId, now());
       if (!finding) return reply.code(404).send({ error: "Finding not found" });
 
@@ -147,14 +183,25 @@ export function registerFindingLifecycleRoutes(app: FastifyInstance, deps: Findi
       const bounty = await bountyEscrow.readBounty(contractKey);
       const auditorWon = bounty.verifiedFinding.toLowerCase() === findingKey.toLowerCase();
       if ((ruling === "ForAuditor") !== auditorWon) {
-        return reply.code(409).send({ error: `the on-chain ruling was ${auditorWon ? "ForAuditor" : "AgainstAuditor"}` });
+        return reply
+          .code(409)
+          .send({
+            error: `the on-chain ruling was ${auditorWon ? "ForAuditor" : "AgainstAuditor"}`,
+          });
       }
 
       const ruled: Dispute | null = await disputes.setRuling(dispute.id, ruling, arbiter, now());
-      if (!ruled) return reply.code(409).send({ error: "Dispute already ruled" });
+      if (!ruled) {
+        const current = await disputes.findById(dispute.id);
+        if (current?.ruling === ruling) return current;
+        return reply.code(409).send({ error: "Dispute already ruled" });
+      }
       await moveFinding(finding.id, auditorWon ? "Verified" : "Rejected");
       await deps.chainActions?.applyDisputeResolved(finding.id).catch((err: unknown) => {
-        request.log.error({ err, findingId: finding.id }, "applyDisputeResolved failed; the expiry sweep will release it");
+        request.log.error(
+          { err, findingId: finding.id },
+          "applyDisputeResolved failed; the expiry sweep will release it",
+        );
       });
       return ruled;
     },
@@ -176,7 +223,10 @@ export function registerFindingLifecycleRoutes(app: FastifyInstance, deps: Findi
 
   /** Moves the finding through the status machine; a move the indexer already
    * made (or went past) is not an error here. */
-  async function moveFinding(findingId: string, next: "Disputed" | "Verified" | "Rejected"): Promise<void> {
+  async function moveFinding(
+    findingId: string,
+    next: "Disputed" | "Verified" | "Rejected",
+  ): Promise<void> {
     try {
       await applyFindingTransition(findingStatus, findingId, next, now().toISOString());
     } catch (err) {
