@@ -6,6 +6,8 @@ import { registerContractRoutes, CONTRACT_MULTIPART_LIMITS } from "./contracts/r
 import { MemorySourceStorage, type SourceStorage } from "./contracts/storage.js";
 import type { AuditorStakingPort } from "./chain/auditor-staking.js";
 import type { ChainActions } from "./chain/actions.js";
+import type { ChainConfig } from "./chain/config.js";
+import { registerChainRoutes } from "./chain/routes.js";
 import { loadPipelineConfig, type PipelineConfig } from "./pipeline/config.js";
 import { MemoryPipelineRepository, MemoryStore } from "./pipeline/memory-repository.js";
 import type { PipelineRepository } from "./pipeline/repository.js";
@@ -35,6 +37,9 @@ export interface AppOptions {
   /** Omit when no chain is configured. Claims then skip the on-chain lock,
    * and no verdict or payout is sent. */
   chainActions?: ChainActions;
+  /** The chain the API talks to, or null/omitted for none. Served to the
+   * browser by GET /api/chain. */
+  chainConfig?: ChainConfig | null;
 }
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -51,6 +56,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const config = options.config ?? loadPipelineConfig();
 
   void app.register(multipart, { limits: CONTRACT_MULTIPART_LIMITS });
+  registerChainRoutes(app, { config: options.chainConfig ?? null });
   registerContractRoutes(app, { repository, storage, now: config.now });
   registerPipelineRoutes(app, {
     contracts: repository,
