@@ -40,6 +40,9 @@ class Settings:
     sandbox_image: str
     challenge_window_s: int
     sandbox_enabled: bool
+    #: With a chain, the API applies sandbox verdicts on-chain and moves the
+    #: finding; the worker only records the PoC's result.
+    chain_enabled: bool
     supported_solc: tuple[str, ...]
 
     @classmethod
@@ -60,6 +63,8 @@ class Settings:
             sandbox_image=_opt(env, "SANDBOX_IMAGE") or "bbm-sandbox:latest",
             challenge_window_s=int(env.get("CHALLENGE_WINDOW_SECONDS", "86400")),
             sandbox_enabled=env.get("SANDBOX_ENABLED", "").strip().lower()
+            in {"1", "true", "yes", "on"},
+            chain_enabled=env.get("CHAIN_ENABLED", "").strip().lower()
             in {"1", "true", "yes", "on"},
             supported_solc=load_supported_solc(),
         )

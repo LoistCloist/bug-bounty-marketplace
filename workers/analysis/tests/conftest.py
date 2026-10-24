@@ -21,7 +21,7 @@ from psycopg.types.json import Jsonb
 os.environ["ANALYSIS_LOAD_DOTENV"] = "0"
 
 MIGRATIONS = Path(__file__).resolve().parents[3] / "apps" / "api" / "src" / "db" / "migrations"
-TABLES = "jobs, poc_submissions, findings, contracts, bounties"
+TABLES = "disputes, jobs, poc_submissions, findings, contracts, bounties"
 
 
 @pytest.fixture(scope="session")

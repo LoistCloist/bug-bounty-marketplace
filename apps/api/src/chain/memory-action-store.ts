@@ -1,6 +1,8 @@
 import type { FindingStatus } from "@bbm/shared";
 import type { MemoryStore } from "../pipeline/memory-repository.js";
-import type { ChainActionStore, FindingChainRef, PayoutDue } from "./action-store.js";
+import type { ChainActionStore, ChainActionStoreOptions, FindingChainRef, PayoutDue } from "./action-store.js";
+import { DEFAULT_CHALLENGE_WINDOW_SECONDS, challengeWindowEnd } from "./action-store.js";
+import { InvalidTransitionError, canTransitionFinding } from "../status/transitions.js";
 
 /** In-memory ChainActionStore over the same MemoryStore the repositories use.
  * Tests and the no-DATABASE_URL setup. */
@@ -9,7 +11,14 @@ export class MemoryChainActionStore implements ChainActionStore {
   private readonly verificationRecorded = new Set<string>();
   private readonly payoutSent = new Set<string>();
 
-  constructor(private readonly store: MemoryStore) {}
+  private readonly challengeWindowSeconds: number;
+
+  constructor(
+    private readonly store: MemoryStore,
+    options: ChainActionStoreOptions = {},
+  ) {
+    this.challengeWindowSeconds = options.challengeWindowSeconds ?? DEFAULT_CHALLENGE_WINDOW_SECONDS;
+  }
 
   async getFindingStatus(findingId: string): Promise<FindingStatus | null> {
     return this.store.findings.get(findingId)?.status ?? null;
@@ -18,8 +27,21 @@ export class MemoryChainActionStore implements ChainActionStore {
   async setFindingStatus(findingId: string, status: FindingStatus, changedAt: string): Promise<void> {
     const record = this.store.findings.get(findingId);
     if (!record) throw new Error(`Finding not found: ${findingId}`);
+    if (record.status === status) return;
+    if (!canTransitionFinding(record.status, status)) {
+      throw new InvalidTransitionError("finding", record.status, status);
+    }
     record.status = status;
     record.statusHistory = [...record.statusHistory, { status, changedAt }];
+    if (status === "Verified") {
+      record.challengeWindowExpiresAt = challengeWindowEnd(changedAt, this.challengeWindowSeconds);
+    }
+    if (status === "Paid") {
+      const stored = this.store.contracts.get(record.contractId);
+      if (stored && (stored.contract.status === "Open" || stored.contract.status === "Claimed")) {
+        stored.contract = { ...stored.contract, status: "Resolved" };
+      }
+    }
   }
 
   async findFinding(findingId: string): Promise<FindingChainRef | null> {

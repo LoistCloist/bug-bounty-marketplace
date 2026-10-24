@@ -80,3 +80,17 @@ export interface ChainActionStore extends FindingStatusReader, FindingStatusWrit
   listPayoutsDue(now: Date): Promise<PayoutDue[]>;
   markPayoutSent(findingId: string, at: Date): Promise<void>;
 }
+
+export interface ChainActionStoreOptions {
+  /** BountyEscrow's challenge window, used to set
+   * findings.challenge_window_expires_at when a finding becomes Verified.
+   * Defaults to the deploy script's 3 days. */
+  challengeWindowSeconds?: number;
+}
+
+export const DEFAULT_CHALLENGE_WINDOW_SECONDS = 259_200;
+
+/** ISO time the challenge window opened at `changedAt` closes. */
+export function challengeWindowEnd(changedAt: string, windowSeconds: number): string {
+  return new Date(Date.parse(changedAt) + windowSeconds * 1000).toISOString();
+}

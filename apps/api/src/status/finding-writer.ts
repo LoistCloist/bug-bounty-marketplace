@@ -23,7 +23,7 @@ export class FindingNotFoundError extends Error {
 
 /**
  * Reads the finding's current status, validates the move with
- * `transitionFinding`, then writes it. Throws `InvalidTransitionError` before
+ * `transitionFinding`, then writes it. Already at `next` is a no-op. Throws `InvalidTransitionError` before
  * any write if the move is illegal.
  *
  * Note: this is read-then-write. A Postgres-backed store should make the write
@@ -38,6 +38,8 @@ export async function applyFindingTransition(
 ): Promise<FindingStatus> {
   const current = await store.getFindingStatus(findingId);
   if (current === null) throw new FindingNotFoundError(findingId);
+  // Another writer (the indexer, a route) may already have applied it.
+  if (current === next) return current;
   const status = transitionFinding(current, next);
   await store.setFindingStatus(findingId, status, changedAt);
   return status;

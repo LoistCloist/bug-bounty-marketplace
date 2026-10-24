@@ -47,3 +47,9 @@ def test_supported_solc_read_from_shared_file():
 def test_challenge_window_default_and_override():
     assert Settings.from_env({}).challenge_window_s == 86400
     assert Settings.from_env({"CHALLENGE_WINDOW_SECONDS": "60"}).challenge_window_s == 60
+
+
+def test_chain_enabled_flag():
+    assert Settings.from_env({}).chain_enabled is False
+    assert Settings.from_env({"CHAIN_ENABLED": "true"}).chain_enabled is True
+    assert Settings.from_env({"CHAIN_ENABLED": "0"}).chain_enabled is False

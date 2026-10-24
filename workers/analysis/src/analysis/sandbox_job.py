@@ -3,6 +3,8 @@
 Passed → PoC Passed, finding Verified, challenge window opens.
 Failed → PoC Failed, finding Rejected.
 Sandbox outage → retried; the finding stays Submitted.
+With CHAIN_ENABLED only the PoC's result is recorded: the API applies the
+verdict on-chain and then moves the finding.
 """
 
 from __future__ import annotations
@@ -78,6 +80,14 @@ def run_sandbox_job(
         "UPDATE poc_submissions SET sandbox_status = %s, sandbox_log = %s WHERE id = %s",
         (result.status, without_nul(result.log), row["id"]),
     )
+    if settings.chain_enabled:
+        # The API records the verification on-chain, then moves the finding.
+        complete(conn, job.id)
+        conn.commit()
+        log.info(
+            "PoC %s: %s (finding %s left for the API)", row["id"], result.status, row["finding_id"]
+        )
+        return JobOutcome(ok=True)
     conn.execute(
         "UPDATE findings SET status = %s,"
         " status_history = status_history || %s,"

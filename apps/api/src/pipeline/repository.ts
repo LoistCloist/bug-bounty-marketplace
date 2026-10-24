@@ -65,4 +65,15 @@ export interface PipelineRepository {
   submitPoc(record: NewPocRecord): Promise<"ok" | "not_flagged" | "no_claim">;
   /** Stores a sandbox verdict on a submitted PoC. Throws if the PoC is unknown. */
   recordVerdict(pocId: string, sandboxStatus: SandboxStatus): Promise<void>;
+  /** Decided PoCs (Passed/Failed) whose verdict the API has not applied yet
+   * and whose finding is still Submitted, oldest first. */
+  listUnappliedVerdicts(limit: number): Promise<UnappliedVerdict[]>;
+  /** Marks a PoC's verdict as applied through chain actions. */
+  markVerdictApplied(pocId: string, at: Date): Promise<void>;
+}
+
+export interface UnappliedVerdict {
+  pocId: string;
+  findingId: string;
+  verdict: "Passed" | "Failed";
 }

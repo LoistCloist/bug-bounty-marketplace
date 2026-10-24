@@ -2,7 +2,13 @@ import type { Pool } from "pg";
 import type { AnalysisStatus, Contract, Finding, SandboxStatus } from "@bbm/shared";
 import { PgContractRepository } from "../contracts/pg-repository.js";
 import { toAnalysisJobStatus, toFinding } from "./mapping.js";
-import type { FindingRecord, JobStatus, NewPocRecord, PipelineRepository } from "./repository.js";
+import type {
+  FindingRecord,
+  JobStatus,
+  NewPocRecord,
+  PipelineRepository,
+  UnappliedVerdict,
+} from "./repository.js";
 
 interface FindingRow {
   id: string;
@@ -176,6 +182,37 @@ export class PgPipelineRepository implements PipelineRepository {
     const result = await this.pool.query(
       "UPDATE poc_submissions SET sandbox_status = $2 WHERE id = $1",
       [pocId, sandboxStatus],
+    );
+    if (result.rowCount !== 1) throw new Error(`Unknown PoC ${pocId}`);
+  }
+
+  async listUnappliedVerdicts(limit: number): Promise<UnappliedVerdict[]> {
+    const result = await this.pool.query<{
+      id: string;
+      finding_id: string;
+      sandbox_status: "Passed" | "Failed";
+    }>(
+      `SELECT p.id, p.finding_id, p.sandbox_status
+         FROM poc_submissions p
+         JOIN findings f ON f.id = p.finding_id
+        WHERE p.sandbox_status IN ('Passed', 'Failed')
+          AND p.verdict_applied_at IS NULL
+          AND f.status = 'Submitted'
+        ORDER BY p.submitted_at, p.id
+        LIMIT $1`,
+      [limit],
+    );
+    return result.rows.map((row) => ({
+      pocId: row.id,
+      findingId: row.finding_id,
+      verdict: row.sandbox_status,
+    }));
+  }
+
+  async markVerdictApplied(pocId: string, at: Date): Promise<void> {
+    const result = await this.pool.query(
+      "UPDATE poc_submissions SET verdict_applied_at = COALESCE(verdict_applied_at, $2) WHERE id = $1",
+      [pocId, at],
     );
     if (result.rowCount !== 1) throw new Error(`Unknown PoC ${pocId}`);
   }
