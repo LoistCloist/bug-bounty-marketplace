@@ -5,6 +5,7 @@ import { RoleSwitcher } from "./RoleSwitcher";
 import { WalletBadge } from "./WalletBadge";
 import { Icon } from "./Icon";
 import { useRoleStore } from "@/lib/role/store";
+import { isLocalChain, useChainInfo } from "@/lib/chain/config";
 const links = [
   { href: "/", label: "Overview", icon: "grid" },
   { href: "/contracts", label: "My contracts", icon: "code", role: "developer" },
@@ -13,6 +14,7 @@ const links = [
   { href: "/guide", label: "Getting started", icon: "book" },
 ] as const;
 export function Header() {
+  const onChain = isLocalChain(useChainInfo());
   const pathname = usePathname();
   const setRole = useRoleStore((s) => s.setRole);
   const current = links.find((item) =>
@@ -94,8 +96,17 @@ export function Header() {
       </header>
       <div className="demo-banner">
         <span className="live-dot" />
-        <strong>Demo environment</strong>
-        <span>Wallets, analysis, stakes, and payouts are simulated. Data resets on reload.</span>
+        {onChain ? (
+          <>
+            <strong>Local test chain</strong>
+            <span>Transactions are real on a local Anvil network; no real funds.</span>
+          </>
+        ) : (
+          <>
+            <strong>Demo environment</strong>
+            <span>Wallets, analysis, stakes, and payouts are simulated. Data resets on reload.</span>
+          </>
+        )}
         <Link href="/guide">
           How it works <span aria-hidden>↗</span>
         </Link>

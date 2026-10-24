@@ -1,10 +1,11 @@
 "use client";
 
-import { SEED_AUDITOR_ID } from "@/mocks/db";
+import { useAuditorId } from "@/lib/chain/use-chain";
 import { ProfileSummary } from "./_components/ProfileSummary";
 import { QueueList } from "./_components/QueueList";
 
 export default function AuditorPage() {
+  const auditorId = useAuditorId();
   return (
     <div className="flex flex-col gap-8">
       <div>
@@ -15,8 +16,8 @@ export default function AuditorPage() {
         </p>
       </div>
 
-      <ProfileSummary auditorId={SEED_AUDITOR_ID} />
-      <QueueList auditorId={SEED_AUDITOR_ID} />
+      <ProfileSummary auditorId={auditorId} />
+      <QueueList auditorId={auditorId} />
     </div>
   );
 }

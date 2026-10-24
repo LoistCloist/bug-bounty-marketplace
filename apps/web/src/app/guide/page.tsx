@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { Icon } from "@/components/Icon";
 import { useRoleStore } from "@/lib/role/store";
+import { isLocalChain, useChainInfo } from "@/lib/chain/config";
 const guides = [
   {
     role: "developer",
@@ -41,6 +42,7 @@ const guides = [
   },
 ] as const;
 export default function GuidePage() {
+  const chainInfo = useChainInfo();
   const setRole = useRoleStore((s) => s.setRole);
   return (
     <div>
@@ -49,6 +51,13 @@ export default function GuidePage() {
           <p className="eyebrow">GETTING STARTED</p>
           <h1>Three roles. One secure workflow.</h1>
           <p>Walk through the complete bounty lifecycle with the frontend demo.</p>
+          {isLocalChain(chainInfo) ? (
+            <p className="mt-2 text-emerald-300">
+              Running on a local test chain: findings appear in under a minute, auditors stake 0.1 ETH,
+              the challenge window is {chainInfo.challengeWindowSeconds} seconds, and losing a dispute
+              slashes half the auditor&apos;s stake. No real funds are involved.
+            </p>
+          ) : null}
         </div>
       </div>
       <div className="guide-grid">

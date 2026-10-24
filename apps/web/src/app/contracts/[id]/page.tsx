@@ -4,6 +4,7 @@ import { use } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { developerApi, ApiError } from "@/lib/api";
+import { useChainCalls } from "@/lib/chain/use-chain";
 import { AnalysisNotice } from "../_components/AnalysisNotice";
 import { FindingCard } from "../_components/FindingCard";
 
@@ -43,13 +44,21 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
     retry: false,
   });
 
+  const chain = useChainCalls();
   const reclaimMutation = useMutation({
-    mutationFn: () => developerApi.reclaimBounty(id),
+    mutationFn: async () => {
+      // On-chain the developer takes the bounty back (refund), then the API records it.
+      if (chain) await chain.refund(id);
+      return developerApi.reclaimBounty(id);
+    },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["contract", id] }),
   });
 
   const cancelMutation = useMutation({
-    mutationFn: () => developerApi.cancelContract(id),
+    mutationFn: async () => {
+      if (chain) await chain.deleteBounty(id);
+      return developerApi.cancelContract(id);
+    },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["contract", id] }),
   });
 
@@ -73,9 +82,9 @@ export default function ContractDetailPage({ params }: { params: Promise<{ id: s
   const canCancel = contract.status === "Open";
 
   const reclaimError =
-    reclaimMutation.error instanceof ApiError ? reclaimMutation.error.message : null;
+    reclaimMutation.error instanceof Error ? reclaimMutation.error.message : null;
   const cancelError =
-    cancelMutation.error instanceof ApiError ? cancelMutation.error.message : null;
+    cancelMutation.error instanceof Error ? cancelMutation.error.message : null;
 
   return (
     <div>

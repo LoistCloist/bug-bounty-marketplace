@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { arbiterApi, ApiError } from "@/lib/api";
 import { useWallet } from "@/lib/wallet";
+import { useChainCalls } from "@/lib/chain/use-chain";
 import { DisputeCard } from "./_components/DisputeCard";
 
 type Tab = "Pending" | "ForAuditor" | "AgainstAuditor" | "All";
@@ -33,9 +34,21 @@ export default function ArbiterPage() {
     refetchInterval: 3_000,
   });
 
+  const chain = useChainCalls();
   const ruleMutation = useMutation({
-    mutationFn: (input: { disputeId: string; ruling: "ForAuditor" | "AgainstAuditor" }) =>
-      arbiterApi.ruleOnDispute(input.disputeId, { arbiterId, ruling: input.ruling }),
+    mutationFn: async (input: {
+      disputeId: string;
+      ruling: "ForAuditor" | "AgainstAuditor";
+      contractId?: string;
+      findingId: string;
+    }) => {
+      // On-chain the arbiter rules first (unfreezing or slashing), then the API records it.
+      if (chain) {
+        if (!input.contractId) throw new Error("This dispute's finding is not loaded yet.");
+        await chain.rule(input.contractId, input.findingId, input.ruling === "ForAuditor");
+      }
+      return arbiterApi.ruleOnDispute(input.disputeId, { arbiterId, ruling: input.ruling });
+    },
     onSuccess: () => {
       setNotice(null);
       void queryClient.invalidateQueries({ queryKey: ["arbiter", "disputes"] });
@@ -59,7 +72,13 @@ export default function ArbiterPage() {
       `Rule ${verb} on dispute ${disputeId}? This cannot be undone.`,
     );
     if (!confirmed) return;
-    ruleMutation.mutate({ disputeId, ruling });
+    const dispute = disputesQuery.data?.find((d) => d.id === disputeId);
+    ruleMutation.mutate({
+      disputeId,
+      ruling,
+      findingId: dispute?.findingId ?? "",
+      contractId: dispute?.finding?.contractId,
+    });
   }
 
   const disputes = disputesQuery.data ?? [];

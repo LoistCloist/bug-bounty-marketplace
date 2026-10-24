@@ -3,7 +3,8 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Finding, FindingSeverity } from "@bbm/shared";
-import { developerApi, ApiError } from "@/lib/api";
+import { developerApi } from "@/lib/api";
+import { useChainCalls } from "@/lib/chain/use-chain";
 
 const SEVERITY_STYLES: Record<FindingSeverity, string> = {
   Critical: "bg-red-500/20 text-red-300 border-red-500/40",
@@ -56,9 +57,13 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
   const remaining = useCountdown(finding.challengeWindowExpiresAt);
   const canDispute = finding.status === "Verified" && remaining !== null;
 
+  const chain = useChainCalls();
   const disputeMutation = useMutation({
-    mutationFn: () =>
-      developerApi.disputeFinding(finding.id, { developerId: developerAddress, reason }),
+    mutationFn: async () => {
+      // On-chain the developer opens the dispute (freezing the payout) first.
+      if (chain) await chain.openDispute(finding.contractId, finding.id, reason);
+      return developerApi.disputeFinding(finding.id, { developerId: developerAddress, reason });
+    },
     onSuccess: () => {
       setShowDisputeForm(false);
       setReason("");
@@ -67,7 +72,7 @@ export function FindingCard({ finding, developerAddress }: FindingCardProps) {
   });
 
   const disputeError =
-    disputeMutation.error instanceof ApiError ? disputeMutation.error.message : null;
+    disputeMutation.error instanceof Error ? disputeMutation.error.message : null;
 
   const changedAt = lastChangedAt(finding);
 

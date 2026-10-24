@@ -4,9 +4,9 @@ import { use } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { developerApi, auditorApi } from "@/lib/api";
-import { SEED_AUDITOR_ID } from "@/mocks/db";
+import { useAuditorId, useRequiredStakeWei } from "@/lib/chain/use-chain";
 import { ClaimCountdown } from "../../_components/ClaimCountdown";
-import { StakeGate, isStakeMet } from "../../_components/StakeGate";
+import { REQUIRED_STAKE_WEI, StakeGate, isStakeMet } from "../../_components/StakeGate";
 import { FindingCard } from "../../_components/FindingCard";
 
 /** True while a finding is still awaiting an auditor action or sandbox
@@ -20,7 +20,8 @@ function isInFlight(status: string): boolean {
 export default function ClaimedContractPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: contractId } = use(params);
   const queryClient = useQueryClient();
-  const auditorId = SEED_AUDITOR_ID;
+  const auditorId = useAuditorId();
+  const requiredStakeWei = useRequiredStakeWei(REQUIRED_STAKE_WEI);
 
   const contractQuery = useQuery({
     queryKey: ["contract", contractId],
@@ -70,7 +71,7 @@ export default function ClaimedContractPage({ params }: { params: Promise<{ id: 
   const contract = contractQuery.data;
   const findings = findingsQuery.data ?? [];
   const profile = profileQuery.data;
-  const stakeMet = isStakeMet(profile.stake);
+  const stakeMet = isStakeMet(profile.stake, requiredStakeWei);
 
   // claimExpiresAt is set per-finding at claim time (see
   // mocks/db/auditors.ts's claimContract) rather than on the contract

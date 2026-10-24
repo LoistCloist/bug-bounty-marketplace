@@ -75,6 +75,12 @@ export function reclaimBounty(contractId: string): Promise<Contract> {
   return postJson(`/api/contracts/${contractId}/reclaim`, {}, ContractSchema);
 }
 
+/** POST /api/contracts/:id/funded - after the developer's BountyEscrow.fund
+ * transaction confirms; the API checks the chain and lists the bounty. */
+export function markFunded(contractId: string): Promise<Contract> {
+  return postJson(`/api/contracts/${contractId}/funded`, {}, ContractSchema);
+}
+
 /** POST /api/contracts/:id/cancel - withdraws a bounty submission before any
  * auditor has engaged with it. Only valid while the contract is still
  * `Open`; the mock 400s once it has been claimed. */
